@@ -38,16 +38,40 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
-      - name: Build Tauri app
-        uses: tauri-apps/tauri-action@v0
+      - name: Build
+        run: pnpm tauri build --target aarch64-apple-darwin
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ""
+
+      - name: Ad-hoc sign
+        run: |
+          APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Vibe Coding Manager.app"
+          codesign --force --deep --sign - "$APP"
+          echo "Signed. Verifying..."
+          codesign -vvv "$APP" 2>&1 || true
+
+      - name: Get version
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Create DMG
+        run: |
+          hdiutil create -volname "Vibe Coding Manager" \
+            -srcfolder "src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Vibe Coding Manager.app" \
+            -ov -format UDZO \
+            "VibeCodingManager_${{ steps.version.outputs.VERSION }}_aarch64.dmg"
+
+      - name: Create Release & Upload
+        uses: softprops/action-gh-release@v2
         with:
-          tagName: v__VERSION__
-          releaseName: Vibe Coding Manager v__VERSION__
-          releaseBody: |
+          name: Vibe Coding Manager v${{ steps.version.outputs.VERSION }}
+          body: |
             macOS ARM64 (Apple Silicon) 版本
-            - 下载 `.dmg` 文件安装
-          releaseDraft: false
-          prerelease: false
-          args: --target aarch64-apple-darwin
+
+            **首次安装说明：**
+            1. 下载 `.dmg` 文件，打开后将应用拖入 Applications
+            2. 首次打开会提示"已取消"，前往 **系统设置 → 隐私与安全性**
+            3. 滚动到底部，点击 **仍要打开**，输入密码确认即可
+          files: |
+            VibeCodingManager_${{ steps.version.outputs.VERSION }}_aarch64.dmg
+            src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Vibe Coding Manager.app.tar.gz
