@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Vibe Coding Manager</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="layout">
+      <aside class="sider">
+        <div class="sider-logo">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none">
+            <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" fill="#1677ff"/>
+          </svg>
+          <span>Vibe Coding</span>
+        </div>
+        <nav class="sider-menu">
+          <div class="menu-group">
+            <div class="menu-label">工作台</div>
+            <a class="menu-item active" href="#" data-group="all">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z"/>
+              </svg>
+              <span>全部项目</span>
+              <span class="menu-badge" id="count-all">0</span>
+            </a>
+          </div>
+          <div class="menu-group">
+            <div class="menu-label">项目分组</div>
+            <div id="group-list"></div>
+          </div>
+        </nav>
+        <div class="sider-footer">
+          <div class="stat-box">
+            <div class="stat-num" id="project-count">0</div>
+            <div class="stat-text">个项目</div>
+          </div>
+          <a class="menu-item sider-action" href="#" id="server-manage-entry">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M5.25 14.25h13.5m-13.5 0a3 3 0 01-3-3m3 3a3 3 0 100 6h13.5a3 3 0 100-6m-16.5-3a3 3 0 013-3h13.5a3 3 0 013 3m-19.5 0a4.5 4.5 0 01.9-2.7L5.737 5.1a3.375 3.375 0 012.7-1.35h7.126c1.062 0 2.062.5 2.7 1.35l2.587 3.45a4.5 4.5 0 01.9 2.7m0 0a3 3 0 01-3 3m0 3h.008v.008h-.008v-.008zm0-6h.008v.008h-.008v-.008zm-3 6h.008v.008h-.008v-.008zm0-6h.008v.008h-.008v-.008z"/>
+            </svg>
+            <span>服务器管理</span>
+          </a>
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="header">
+          <div class="header-title">
+            <h1>项目管理</h1>
+            <span class="breadcrumb">工作台 / 项目管理</span>
+          </div>
+          <div class="header-actions">
+            <div class="search-wrap">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"/>
+              </svg>
+              <input id="search-input" type="text" placeholder="搜索项目名称、路径..." />
+            </div>
+            <button class="btn" id="export-btn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"/>
+              </svg>
+              导出 Excel
+            </button>
+            <button class="btn btn-primary" id="add-btn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 4.5v15m7.5-7.5h-15"/>
+              </svg>
+              新建项目
+            </button>
+          </div>
+        </header>
+
+        <div class="content">
+          <div class="card-list" id="project-list"></div>
+          <div class="empty" id="empty-state" style="display:none;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+              <path d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z"/>
+            </svg>
+            <h3>暂无项目</h3>
+            <p>点击「新建项目」开始添加</p>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <!-- 新建/编辑 Modal -->
+    <div class="modal-mask" id="modal-overlay">
+      <div class="modal-wrap">
+        <div class="modal">
+          <div class="modal-header">
+            <span class="modal-title" id="modal-title">新建项目</span>
+            <button class="modal-x" id="modal-close">&times;</button>
+          </div>
+          <div class="modal-body">
+            <form id="project-form">
+              <input type="hidden" id="project-id" />
+              <div class="form-item">
+                <label class="form-label required">项目名称</label>
+                <input class="form-input" type="text" id="project-name" required placeholder="请输入项目名称" />
+              </div>
+              <div class="form-item">
+                <label class="form-label required">本地路径</label>
+                <div class="form-input-group">
+                  <input class="form-input" type="text" id="project-path" required placeholder="请选择项目路径" />
+                  <button type="button" class="btn btn-default" id="browse-btn">选择</button>
+                </div>
+              </div>
+              <div class="form-item">
+                <label class="form-label">远端仓库</label>
+                <input class="form-input" type="text" id="project-url" placeholder="https://github.com/..." />
+              </div>
+              <div class="form-item">
+                <label class="form-label">项目分组</label>
+                <input class="form-input" type="text" id="project-group" placeholder="如：前端、后端、工具" list="group-suggestions" />
+                <datalist id="group-suggestions"></datalist>
+              </div>
+              <div class="form-item">
+                <label class="form-label required">运行环境</label>
+                <select class="form-select" id="project-machine" required>
+                  <option value="">请选择</option>
+                  <option value="local">本地电脑</option>
+                  <option value="server">服务器</option>
+                </select>
+              </div>
+              <div class="form-item" id="server-select-wrap" style="display:none;">
+                <label class="form-label required">选择服务器</label>
+                <div class="form-input-group">
+                  <select class="form-select" id="project-server">
+                    <option value="">请选择服务器</option>
+                  </select>
+                  <button type="button" class="btn btn-default" id="manage-server-btn">管理</button>
+                </div>
+              </div>
+              <div class="form-item">
+                <label class="form-label">项目描述</label>
+                <textarea class="form-textarea" id="project-desc" rows="3" placeholder="请输入项目描述"></textarea>
+              </div>
+            </form>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-default" id="cancel-btn">取消</button>
+            <button class="btn btn-primary" id="submit-btn">确定</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 删除确认 -->
+    <div class="modal-mask" id="confirm-overlay">
+      <div class="modal-wrap">
+        <div class="modal modal-sm">
+          <div class="modal-header">
+            <span class="modal-title">确认删除</span>
+            <button class="modal-x" id="confirm-close">&times;</button>
+          </div>
+          <div class="modal-body">
+            <div class="confirm-msg">
+              <svg class="confirm-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/>
+              </svg>
+              <p>确定要删除项目 <strong id="delete-project-name"></strong> 吗？</p>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-default" id="confirm-cancel">取消</button>
+            <button class="btn btn-danger" id="confirm-delete">删除</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 服务器管理 Modal -->
+    <div class="modal-mask" id="server-modal-overlay">
+      <div class="modal-wrap">
+        <div class="modal">
+          <div class="modal-header">
+            <span class="modal-title" id="server-modal-title">添加服务器</span>
+            <button class="modal-x" id="server-modal-close">&times;</button>
+          </div>
+          <div class="modal-body">
+            <form id="server-form">
+              <input type="hidden" id="server-id" />
+              <div class="form-item">
+                <label class="form-label required">服务器名称</label>
+                <input class="form-input" type="text" id="server-name" required placeholder="如：生产机A" />
+              </div>
+              <div class="form-item">
+                <label class="form-label required">主机地址</label>
+                <input class="form-input" type="text" id="server-host" required placeholder="IP 或域名" />
+              </div>
+              <div class="form-item">
+                <label class="form-label">SSH 端口</label>
+                <input class="form-input" type="number" id="server-port" placeholder="22" value="22" />
+              </div>
+              <div class="form-item">
+                <label class="form-label required">用户名</label>
+                <input class="form-input" type="text" id="server-user" required placeholder="root" />
+              </div>
+              <div class="form-item">
+                <label class="form-label required">登录方式</label>
+                <select class="form-select" id="server-auth-type" required>
+                  <option value="password">密码</option>
+                  <option value="key">秘钥</option>
+                </select>
+              </div>
+              <div class="form-item" id="auth-password-wrap">
+                <label class="form-label required">密码</label>
+                <input class="form-input" type="password" id="server-password" placeholder="SSH 密码" />
+              </div>
+              <div class="form-item" id="auth-key-wrap" style="display:none;">
+                <label class="form-label required">秘钥路径</label>
+                <div class="form-input-group">
+                  <input class="form-input" type="text" id="server-key-path" placeholder="~/.ssh/id_rsa" />
+                  <button type="button" class="btn btn-default" id="browse-key-btn">选择</button>
+                </div>
+              </div>
+              <div class="form-item">
+                <label class="form-label">备注</label>
+                <input class="form-input" type="text" id="server-note" placeholder="可选" />
+              </div>
+            </form>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-default" id="server-cancel-btn">取消</button>
+            <button class="btn btn-primary" id="server-submit-btn">确定</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 服务器列表管理 Modal -->
+    <div class="modal-mask" id="server-list-overlay">
+      <div class="modal-wrap">
+        <div class="modal modal-lg">
+          <div class="modal-header">
+            <span class="modal-title">服务器管理</span>
+            <button class="modal-x" id="server-list-close">&times;</button>
+          </div>
+          <div class="modal-body">
+            <div class="server-list-header">
+              <button class="btn btn-primary btn-sm" id="add-server-btn">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M12 4.5v15m7.5-7.5h-15"/>
+                </svg>
+                添加服务器
+              </button>
+            </div>
+            <div class="server-list" id="server-list"></div>
+            <div class="server-empty" id="server-empty">暂无服务器，点击上方按钮添加</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="message-container" id="toast-container"></div>
+    <script type="module" src="main.js"></script>
+  </body>
+</html>
