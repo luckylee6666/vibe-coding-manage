@@ -69,3 +69,13 @@ pnpm tauri build
 ## 下载
 
 前往 [Releases](https://github.com/luckylee6666/vibe-coding-manage/releases) 下载 macOS ARM64 (Apple Silicon) 版本。
+
+### macOS 安装说明
+
+由于应用未签名，首次打开会被 macOS 拦截，请按以下步骤授权：
+
+1. 双击 `.dmg` 文件，将 `Vibe Coding Manager.app` 拖入 Applications
+2. 首次打开时会提示"已取消"或"移到废纸篓"
+3. 打开 **系统设置 → 隐私与安全性**，滚动到底部
+4. 在"安全性"区域会看到 `"Vibe Coding Manager"已被阻止打开，因为它来自未验证的开发者`
+5. 点击 **仍要打开**，输入密码确认即可
