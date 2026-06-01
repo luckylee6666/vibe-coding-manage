@@ -1,8 +1,12 @@
+use base64::Engine;
+use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::Mutex;
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -268,16 +272,23 @@ fn open_folder_dialog() -> Result<String, String> {
     Ok(folder.to_string_lossy().to_string())
 }
 
+/// 把路径包成单引号 shell 字面量（转义内部单引号），
+/// 防止空格、`;`、反引号、`$()` 等破坏命令或被注入执行。
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
 #[tauri::command]
 fn open_terminal(path: String) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
+        // 两层转义：先 shell 单引号包路径，再为 AppleScript 字符串转义 \ 和 "
+        let cmd = format!("cd {} && claude", shell_quote(&path));
+        let as_escaped = cmd.replace('\\', "\\\\").replace('"', "\\\"");
         let script = format!(
-            r#"tell application "Terminal"
-                activate
-                do script "cd {} && claude"
-            end tell"#,
-            path.replace("\"", "\\\"")
+            "tell application \"Terminal\"\n\tactivate\n\tdo script \"{}\"\nend tell",
+            as_escaped
         );
         std::process::Command::new("osascript")
             .args(["-e", &script])
@@ -286,15 +297,22 @@ fn open_terminal(path: String) -> Result<(), String> {
     }
     #[cfg(target_os = "linux")]
     {
+        // bash -c 收到独立 argv，路径再用单引号包裹，无嵌套引号问题
         std::process::Command::new("x-terminal-emulator")
-            .args(["-e", &format!("bash -c 'cd {} && claude; exec bash'", path.replace("'", "'\\''"))])
+            .args([
+                "-e",
+                "bash",
+                "-c",
+                &format!("cd {} && claude; exec bash", shell_quote(&path)),
+            ])
             .spawn()
             .map_err(|e| e.to_string())?;
     }
     #[cfg(target_os = "windows")]
     {
+        // Windows 路径用双引号包裹（路径通常不含 "）
         std::process::Command::new("cmd")
-            .args(["/C", "start", "cmd", "/K", &format!("cd /d {} && claude", path)])
+            .args(["/C", "start", "cmd", "/K", &format!("cd /d \"{}\" && claude", path)])
             .spawn()
             .map_err(|e| e.to_string())?;
     }
@@ -388,6 +406,248 @@ fn pick_ssh_key() -> Result<String, String> {
     Ok(file.to_string_lossy().to_string())
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScannedProject {
+    pub name: String,
+    pub path: String,
+    pub remote_url: String,
+    pub group: String,
+}
+
+#[tauri::command]
+fn scan_directory(path: String) -> Result<Vec<ScannedProject>, String> {
+    let dir = std::path::Path::new(&path);
+    if !dir.is_dir() {
+        return Err("路径不是目录".to_string());
+    }
+
+    let dir_name = dir.file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+
+    let mut results = Vec::new();
+
+    // 检查当前目录是否本身就是 git 仓库
+    if dir.join(".git").exists() {
+        let remote = read_git_remote(dir);
+        results.push(ScannedProject {
+            name: dir_name.clone(),
+            path: dir.to_string_lossy().to_string(),
+            remote_url: remote,
+            group: String::new(),
+        });
+        return Ok(results);
+    }
+
+    // 扫描子目录
+    let entries = fs::read_dir(dir).map_err(|e| e.to_string())?;
+    for entry in entries {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let entry_path = entry.path();
+        if !entry_path.is_dir() {
+            continue;
+        }
+        // 跳过隐藏目录
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') {
+            continue;
+        }
+        if entry_path.join(".git").exists() {
+            let remote = read_git_remote(&entry_path);
+            results.push(ScannedProject {
+                name,
+                path: entry_path.to_string_lossy().to_string(),
+                remote_url: remote,
+                group: dir_name.clone(),
+            });
+        }
+    }
+
+    results.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(results)
+}
+
+fn read_git_remote(repo_path: &std::path::Path) -> String {
+    let config_path = repo_path.join(".git").join("config");
+    let content = match fs::read_to_string(&config_path) {
+        Ok(c) => c,
+        Err(_) => return String::new(),
+    };
+    // 简单解析 git config 找 remote "origin" 的 url
+    let mut in_origin = false;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed == "[remote \"origin\"]" {
+            in_origin = true;
+            continue;
+        }
+        if in_origin && trimmed.starts_with('[') {
+            break;
+        }
+        if in_origin {
+            if let Some(url) = trimmed.strip_prefix("url = ") {
+                return url.trim().to_string();
+            }
+            if let Some(url) = trimmed.strip_prefix("url=") {
+                return url.trim().to_string();
+            }
+        }
+    }
+    String::new()
+}
+
+#[tauri::command]
+fn open_pick_directory() -> Result<String, String> {
+    let dir = rfd::FileDialog::new()
+        .set_title("选择要扫描的目录")
+        .pick_folder()
+        .ok_or_else(|| "未选择目录".to_string())?;
+    Ok(dir.to_string_lossy().to_string())
+}
+
+// ========== 内置终端（PTY）==========
+
+/// 一个活跃的伪终端会话：保留 master（用于 resize）、writer（写入键入）、child（用于 kill）
+struct PtySession {
+    master: Box<dyn MasterPty + Send>,
+    writer: Box<dyn Write + Send>,
+    child: Box<dyn Child + Send + Sync>,
+}
+
+#[derive(Default)]
+struct TerminalState {
+    sessions: Mutex<HashMap<String, PtySession>>,
+}
+
+#[derive(Clone, Serialize)]
+struct TerminalOutput {
+    id: String,
+    /// base64 编码的原始字节（避免 UTF-8 切断转义序列 / 多字节字符）
+    data: String,
+}
+
+/// 创建一个新的终端会话，在 `cwd` 起一个登录 shell，并把输出流式推到前端。
+#[tauri::command]
+fn terminal_create(
+    app: AppHandle,
+    state: State<TerminalState>,
+    id: String,
+    cwd: String,
+    cols: u16,
+    rows: u16,
+) -> Result<(), String> {
+    let pty_system = native_pty_system();
+    let pair = pty_system
+        .openpty(PtySize {
+            rows: rows.max(1),
+            cols: cols.max(1),
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|e| e.to_string())?;
+
+    // 用用户默认 shell；交互式登录以加载 PATH/别名（claude 通常装在用户 PATH 里）
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
+    let mut cmd = CommandBuilder::new(&shell);
+    cmd.arg("-l");
+    if !cwd.is_empty() && std::path::Path::new(&cwd).is_dir() {
+        cmd.cwd(&cwd);
+    }
+    cmd.env("TERM", "xterm-256color");
+
+    let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
+    // slave 句柄在 spawn 后即可释放，否则子进程退出时读端不会收到 EOF
+    drop(pair.slave);
+
+    let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
+    let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
+
+    // 后台线程持续读 PTY 输出，base64 后通过事件推给前端
+    let app_evt = app.clone();
+    let sid = id.clone();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 8192];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    let data = base64::engine::general_purpose::STANDARD.encode(&buf[..n]);
+                    let _ = app_evt.emit(
+                        "terminal-output",
+                        TerminalOutput {
+                            id: sid.clone(),
+                            data,
+                        },
+                    );
+                }
+                Err(_) => break,
+            }
+        }
+        let _ = app_evt.emit("terminal-exit", &sid);
+    });
+
+    state
+        .sessions
+        .lock()
+        .map_err(|e| e.to_string())?
+        .insert(
+            id,
+            PtySession {
+                master: pair.master,
+                writer,
+                child,
+            },
+        );
+    Ok(())
+}
+
+/// 把前端的键入（已是 UTF-8 文本）写进对应会话的 PTY。
+#[tauri::command]
+fn terminal_write(state: State<TerminalState>, id: String, data: String) -> Result<(), String> {
+    let mut sessions = state.sessions.lock().map_err(|e| e.to_string())?;
+    let session = sessions.get_mut(&id).ok_or("会话不存在")?;
+    session
+        .writer
+        .write_all(data.as_bytes())
+        .map_err(|e| e.to_string())?;
+    session.writer.flush().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 终端尺寸变化时同步 PTY 窗口大小（让 TUI 正确换行）。
+#[tauri::command]
+fn terminal_resize(
+    state: State<TerminalState>,
+    id: String,
+    cols: u16,
+    rows: u16,
+) -> Result<(), String> {
+    let sessions = state.sessions.lock().map_err(|e| e.to_string())?;
+    let session = sessions.get(&id).ok_or("会话不存在")?;
+    session
+        .master
+        .resize(PtySize {
+            rows: rows.max(1),
+            cols: cols.max(1),
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 关闭并清理一个会话（杀掉子进程）。
+#[tauri::command]
+fn terminal_close(state: State<TerminalState>, id: String) -> Result<(), String> {
+    let mut sessions = state.sessions.lock().map_err(|e| e.to_string())?;
+    if let Some(mut session) = sessions.remove(&id) {
+        let _ = session.child.kill();
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let state = Mutex::new(AppState::new());
@@ -395,6 +655,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(state)
+        .manage(TerminalState::default())
         .invoke_handler(tauri::generate_handler![
             get_projects,
             add_project,
@@ -408,7 +669,13 @@ pub fn run() {
             add_server,
             update_server,
             delete_server,
-            pick_ssh_key
+            pick_ssh_key,
+            scan_directory,
+            open_pick_directory,
+            terminal_create,
+            terminal_write,
+            terminal_resize,
+            terminal_close
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -484,5 +751,67 @@ mod tests {
         assert_eq!(loaded[0].name, "test");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 验证 base64 对终端原始字节（含转义序列、UTF-8 多字节、控制字符）能无损往返。
+    #[test]
+    fn test_terminal_base64_roundtrip() {
+        let data: &[u8] = b"\x1b[31m\xe4\xbd\xa0\xe5\xa5\xbd\x07\x1b[0m"; // ESC[31m 你好 BEL ESC[0m
+        let enc = base64::engine::general_purpose::STANDARD.encode(data);
+        let dec = base64::engine::general_purpose::STANDARD.decode(&enc).unwrap();
+        assert_eq!(dec, data, "base64 应无损还原原始终端字节");
+    }
+
+    /// 验证本机能真正打开 PTY、起一个 shell、写入命令并读回输出（内置终端的核心机制）。
+    #[test]
+    fn test_pty_spawn_echo() {
+        let pty_system = native_pty_system();
+        let pair = pty_system
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("openpty 失败");
+
+        let cmd = CommandBuilder::new("/bin/sh");
+        let mut child = pair.slave.spawn_command(cmd).expect("spawn shell 失败");
+        drop(pair.slave);
+
+        let mut reader = pair.master.try_clone_reader().expect("clone reader 失败");
+        let mut writer = pair.master.take_writer().expect("take writer 失败");
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut out = Vec::new();
+            let mut buf = [0u8; 4096];
+            loop {
+                match reader.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => out.extend_from_slice(&buf[..n]),
+                    Err(_) => break,
+                }
+            }
+            let _ = tx.send(out);
+        });
+
+        writer.write_all(b"echo VIBE_TEST_123\n").unwrap();
+        writer.flush().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        writer.write_all(b"exit\n").unwrap();
+        writer.flush().unwrap();
+
+        let out = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("读取 PTY 输出超时");
+        let _ = child.wait();
+
+        let s = String::from_utf8_lossy(&out);
+        assert!(
+            s.contains("VIBE_TEST_123"),
+            "PTY 输出应包含 echo 的内容，实际收到: {:?}",
+            s
+        );
     }
 }

@@ -23,3 +23,5 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4"] }
 dirs = "5"
 opener = "0.7"
+portable-pty = "0.8"
+base64 = "0.22"

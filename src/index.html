@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Vibe Coding Manager</title>
+    <link rel="stylesheet" href="vendor/xterm.css" />
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
@@ -68,6 +69,12 @@
               </svg>
               新建项目
             </button>
+            <button class="btn" id="scan-btn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.875 1.875 0 010 3.75H5.625a1.875 1.875 0 010-3.75z"/>
+              </svg>
+              扫描导入
+            </button>
           </div>
         </header>
 
@@ -78,7 +85,7 @@
               <path d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z"/>
             </svg>
             <h3>暂无项目</h3>
-            <p>点击「新建项目」开始添加</p>
+            <p>点击「新建项目」添加，或「扫描导入」批量导入</p>
           </div>
         </div>
       </main>
@@ -205,8 +212,7 @@
                 </select>
               </div>
               <div class="form-item" id="auth-password-wrap">
-                <label class="form-label required">密码</label>
-                <input class="form-input" type="password" id="server-password" placeholder="SSH 密码" />
+                <div class="form-hint">出于安全考虑不保存密码，连接时请手动输入。</div>
               </div>
               <div class="form-item" id="auth-key-wrap" style="display:none;">
                 <label class="form-label required">秘钥路径</label>
@@ -253,7 +259,54 @@
       </div>
     </div>
 
+    <!-- 扫描结果 Modal -->
+    <div class="modal-mask" id="scan-modal-overlay">
+      <div class="modal-wrap">
+        <div class="modal modal-lg">
+          <div class="modal-header">
+            <span class="modal-title" id="scan-modal-title">扫描结果</span>
+            <button class="modal-x" id="scan-modal-close">&times;</button>
+          </div>
+          <div class="modal-body">
+            <div id="scan-status" class="scan-status"></div>
+            <div id="scan-list" class="scan-list"></div>
+            <div id="scan-empty" class="server-empty" style="display:none;">未发现 git 项目</div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-default" id="scan-cancel-btn">取消</button>
+            <button class="btn btn-primary" id="scan-import-btn">导入选中</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div class="message-container" id="toast-container"></div>
+
+    <!-- 内置终端：底部抽屉，多标签集中管理所有会话 -->
+    <div class="terminal-dock" id="terminal-dock">
+      <div class="terminal-resize" id="terminal-resize"></div>
+      <div class="terminal-head">
+        <div class="terminal-tabs" id="terminal-tabs"></div>
+        <div class="terminal-head-tools">
+          <button class="term-tool-btn" id="terminal-new-btn" title="新建终端">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 4.5v15m7.5-7.5h-15"/></svg>
+          </button>
+          <button class="term-tool-btn" id="terminal-collapse-btn" title="收起面板">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19.5 8.25l-7.5 7.5-7.5-7.5"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="terminal-bodies" id="terminal-bodies"></div>
+    </div>
+
+    <!-- 浮动开关：收起时显示，带会话数角标 -->
+    <button class="terminal-fab" id="terminal-fab" title="终端">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6.75 7.5l3 2.25-3 2.25m4.5 0h3M3.375 3h17.25c.621 0 1.125.504 1.125 1.125v15.75c0 .621-.504 1.125-1.125 1.125H3.375c-.621 0-1.125-.504-1.125-1.125V4.125C2.25 3.504 2.754 3 3.375 3z"/></svg>
+      <span class="terminal-fab-badge" id="terminal-fab-badge" style="display:none;">0</span>
+    </button>
+
+    <script src="vendor/xterm.js"></script>
+    <script src="vendor/addon-fit.js"></script>
     <script type="module" src="main.js"></script>
   </body>
 </html>

@@ -58,7 +58,6 @@ const el = {
   serverPort: $('server-port'),
   serverUser: $('server-user'),
   serverAuthType: $('server-auth-type'),
-  serverPassword: $('server-password'),
   serverKeyPath: $('server-key-path'),
   serverNote: $('server-note'),
   authPasswordWrap: $('auth-password-wrap'),
@@ -71,6 +70,15 @@ const el = {
   addServerBtn: $('add-server-btn'),
   serverList: $('server-list'),
   serverEmpty: $('server-empty'),
+  scanBtn: $('scan-btn'),
+  scanModal: $('scan-modal-overlay'),
+  scanModalTitle: $('scan-modal-title'),
+  scanModalClose: $('scan-modal-close'),
+  scanStatus: $('scan-status'),
+  scanList: $('scan-list'),
+  scanEmpty: $('scan-empty'),
+  scanCancelBtn: $('scan-cancel-btn'),
+  scanImportBtn: $('scan-import-btn'),
 };
 
 async function init() {
@@ -310,6 +318,20 @@ function bind() {
     e.preventDefault();
     openServerList();
   };
+
+  // 扫描导入
+  el.scanBtn.onclick = startScan;
+  el.scanModalClose.onclick = closeScanModal;
+  el.scanCancelBtn.onclick = closeScanModal;
+  el.scanModal.onclick = e => { if (e.target === el.scanModal) closeScanModal(); };
+  el.scanImportBtn.onclick = importScanned;
+
+  // 内置终端
+  termEl.fab.onclick = () => { sessions.size ? openDock() : createSession({}); };
+  termEl.collapseBtn.onclick = collapseDock;
+  termEl.newBtn.onclick = () => createSession({});
+  setupTermResize();
+  window.addEventListener('resize', () => { if (activeSession) fitSession(activeSession); });
 }
 
 function openModal(p = null) {
@@ -366,8 +388,7 @@ async function browse() {
 
 async function openTerminal(p) {
   try {
-    await invoke('open_terminal', { path: p.localPath });
-    msg('已打开终端', 'success');
+    await createSession({ cwd: p.localPath, name: p.name, autoClaude: true });
   } catch (e) {
     console.error('打开终端失败:', e);
     msg('打开终端失败: ' + (e.message || e), 'error');
@@ -451,7 +472,6 @@ function openServerModal(s = null) {
     el.serverPort.value = s.port || 22;
     el.serverUser.value = s.user;
     el.serverAuthType.value = s.authType || 'password';
-    el.serverPassword.value = s.password || '';
     el.serverKeyPath.value = s.keyPath || '';
     el.serverNote.value = s.note || '';
   } else {
@@ -496,7 +516,6 @@ async function submitServer(e) {
     port: parseInt(el.serverPort.value) || 22,
     user: el.serverUser.value.trim(),
     authType: el.serverAuthType.value,
-    password: el.serverAuthType.value === 'password' ? el.serverPassword.value : '',
     keyPath: el.serverAuthType.value === 'key' ? el.serverKeyPath.value.trim() : '',
     note: el.serverNote.value.trim(),
   };
@@ -615,6 +634,277 @@ function tagCls(m) {
 
 function tagLabel(m) {
   return { local: '本地电脑', server: '服务器' }[m] || m || '未知';
+}
+
+// ========== 扫描导入 ==========
+
+let scannedProjects = [];
+
+async function startScan() {
+  try {
+    const dir = await invoke('open_pick_directory');
+    if (!dir) return;
+    el.scanStatus.textContent = '扫描中...';
+    el.scanList.innerHTML = '';
+    el.scanEmpty.style.display = 'none';
+    el.scanModal.classList.add('active');
+
+    scannedProjects = await invoke('scan_directory', { path: dir });
+
+    el.scanStatus.textContent = `在 ${dir} 中发现 ${scannedProjects.length} 个项目`;
+
+    if (!scannedProjects.length) {
+      el.scanEmpty.style.display = '';
+      return;
+    }
+
+    el.scanList.innerHTML = scannedProjects.map((p, i) => `
+      <label class="scan-item" data-index="${i}">
+        <input type="checkbox" checked class="scan-checkbox" />
+        <div class="scan-item-info">
+          <div class="scan-item-name">${esc(p.name)}</div>
+          <div class="scan-item-path">${esc(p.path)}</div>
+          ${p.remoteUrl ? `<div class="scan-item-url">${esc(p.remoteUrl)}</div>` : ''}
+        </div>
+      </label>
+    `).join('');
+  } catch (e) {
+    console.error('扫描失败:', e);
+    msg('扫描失败: ' + (e.message || e), 'error');
+  }
+}
+
+function closeScanModal() {
+  el.scanModal.classList.remove('active');
+  scannedProjects = [];
+}
+
+async function importScanned() {
+  const checkboxes = el.scanList.querySelectorAll('.scan-checkbox');
+  const toImport = [];
+  checkboxes.forEach((cb, i) => {
+    if (cb.checked && scannedProjects[i]) {
+      toImport.push(scannedProjects[i]);
+    }
+  });
+
+  if (!toImport.length) {
+    msg('请至少选择一个项目', 'error');
+    return;
+  }
+
+  // 按本地路径去重，跳过已存在的项目，避免重复扫描导入产生重复条目
+  const existingPaths = new Set(projects.map(p => p.localPath));
+
+  let success = 0;
+  let fail = 0;
+  let skipped = 0;
+  for (const p of toImport) {
+    if (existingPaths.has(p.path)) {
+      skipped++;
+      continue;
+    }
+    try {
+      await invoke('add_project', {
+        name: p.name,
+        localPath: p.path,
+        remoteUrl: p.remoteUrl || '',
+        machine: 'local',
+        serverId: '',
+        group: p.group || '',
+        description: '',
+      });
+      existingPaths.add(p.path);
+      success++;
+    } catch (e) {
+      console.error('导入失败:', p.name, e);
+      fail++;
+    }
+  }
+
+  closeScanModal();
+  await load();
+
+  const parts = [`${success} 个成功`];
+  if (skipped) parts.push(`${skipped} 个已存在跳过`);
+  if (fail) parts.push(`${fail} 个失败`);
+  msg(`导入完成：${parts.join('，')}`, fail ? 'error' : 'success');
+}
+
+// ========== 内置终端 ==========
+
+const termEl = {
+  dock: $('terminal-dock'),
+  tabs: $('terminal-tabs'),
+  bodies: $('terminal-bodies'),
+  resize: $('terminal-resize'),
+  newBtn: $('terminal-new-btn'),
+  collapseBtn: $('terminal-collapse-btn'),
+  fab: $('terminal-fab'),
+  fabBadge: $('terminal-fab-badge'),
+};
+
+const sessions = new Map(); // id -> { term, fit, tabEl, bodyEl, name, status }
+let activeSession = null;
+let termSeq = 0;
+let termEventsBound = false;
+
+function b64ToBytes(b64) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
+async function bindTermEvents() {
+  if (termEventsBound) return;
+  termEventsBound = true;
+  const listen = window.__TAURI__.event.listen;
+  await listen('terminal-output', e => {
+    const s = sessions.get(e.payload.id);
+    if (s) s.term.write(b64ToBytes(e.payload.data));
+  });
+  await listen('terminal-exit', e => {
+    const s = sessions.get(e.payload);
+    if (s) {
+      s.status = 'exited';
+      s.tabEl.classList.add('exited');
+      s.term.write('\r\n\x1b[90m[会话已结束]\x1b[0m\r\n');
+    }
+  });
+}
+
+function openDock() {
+  termEl.dock.classList.add('active');
+  termEl.fab.classList.add('hidden');
+  if (activeSession) requestAnimationFrame(() => fitSession(activeSession));
+}
+
+function collapseDock() {
+  termEl.dock.classList.remove('active');
+  termEl.fab.classList.remove('hidden');
+}
+
+function updateFabBadge() {
+  const n = sessions.size;
+  termEl.fabBadge.style.display = n ? '' : 'none';
+  termEl.fabBadge.textContent = n;
+}
+
+function fitSession(id) {
+  const s = sessions.get(id);
+  if (!s) return;
+  try {
+    s.fit.fit();
+    invoke('terminal_resize', { id, cols: s.term.cols, rows: s.term.rows }).catch(() => {});
+  } catch (e) {}
+}
+
+function activateSession(id) {
+  const s = sessions.get(id);
+  if (!s) return;
+  activeSession = id;
+  sessions.forEach((other, oid) => {
+    const on = oid === id;
+    other.tabEl.classList.toggle('active', on);
+    other.bodyEl.classList.toggle('active', on);
+  });
+  fitSession(id);
+  s.term.focus();
+}
+
+async function closeSession(id) {
+  const s = sessions.get(id);
+  if (!s) return;
+  try { await invoke('terminal_close', { id }); } catch (e) {}
+  s.term.dispose();
+  s.tabEl.remove();
+  s.bodyEl.remove();
+  sessions.delete(id);
+  if (activeSession === id) {
+    activeSession = null;
+    const next = sessions.keys().next().value;
+    if (next) activateSession(next);
+    else collapseDock();
+  }
+  updateFabBadge();
+}
+
+async function createSession({ cwd = '', name = '', autoClaude = false }) {
+  await bindTermEvents();
+  const id = `term-${Date.now()}-${++termSeq}`;
+  const label = name || `终端 ${termSeq}`;
+
+  const bodyEl = document.createElement('div');
+  bodyEl.className = 'term-body';
+  bodyEl.dataset.id = id;
+  termEl.bodies.appendChild(bodyEl);
+
+  const tabEl = document.createElement('div');
+  tabEl.className = 'term-tab';
+  tabEl.dataset.id = id;
+  tabEl.innerHTML =
+    `<span class="term-tab-dot"></span>` +
+    `<span class="term-tab-name" title="${esc(label)}">${esc(label)}</span>` +
+    `<span class="term-tab-close" title="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 18L18 6M6 6l12 12"/></svg></span>`;
+  termEl.tabs.appendChild(tabEl);
+  tabEl.onclick = (ev) => {
+    if (ev.target.closest('.term-tab-close')) { closeSession(id); return; }
+    activateSession(id);
+  };
+
+  const term = new window.Terminal({
+    fontSize: 13,
+    fontFamily: '"JetBrains Mono", Menlo, Monaco, "Courier New", monospace',
+    cursorBlink: true,
+    scrollback: 5000,
+    theme: { background: '#14171e', foreground: '#e6eaf2', cursor: '#1677ff' },
+  });
+  const fit = new window.FitAddon.FitAddon();
+  term.loadAddon(fit);
+  term.open(bodyEl);
+  term.onData(d => invoke('terminal_write', { id, data: d }).catch(() => {}));
+
+  sessions.set(id, { term, fit, tabEl, bodyEl, name: label, status: 'running' });
+
+  openDock();
+  activateSession(id);
+  requestAnimationFrame(() => fitSession(id));
+  updateFabBadge();
+
+  try {
+    await invoke('terminal_create', { id, cwd, cols: term.cols || 80, rows: term.rows || 24 });
+    fitSession(id);
+    if (autoClaude) {
+      setTimeout(() => invoke('terminal_write', { id, data: 'claude\r' }).catch(() => {}), 400);
+    }
+  } catch (e) {
+    term.write(`\r\n\x1b[31m启动失败: ${e}\x1b[0m\r\n`);
+  }
+
+  return id;
+}
+
+function setupTermResize() {
+  let startY = 0;
+  let startH = 0;
+  const onMove = (e) => {
+    const h = Math.min(Math.max(startH + (startY - e.clientY), 160), window.innerHeight - 120);
+    termEl.dock.style.height = h + 'px';
+    if (activeSession) fitSession(activeSession);
+  };
+  const onUp = () => {
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    document.body.style.userSelect = '';
+  };
+  termEl.resize.addEventListener('mousedown', (e) => {
+    startY = e.clientY;
+    startH = termEl.dock.offsetHeight;
+    document.body.style.userSelect = 'none';
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
 }
 
 init();
