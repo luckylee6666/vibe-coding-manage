@@ -625,6 +625,11 @@ body {
   visibility: visible;
 }
 
+/* 确认弹窗叠在其他弹窗（如服务器列表）之上 */
+#confirm-overlay {
+  z-index: 1100;
+}
+
 .modal-wrap {
   position: absolute;
   inset: 0;
@@ -1032,13 +1037,8 @@ body {
 .server-card-actions {
   display: flex;
   gap: 4px;
-  opacity: 0;
-  transition: opacity 0.15s;
-  flex-shrink: 0;
-}
-
-.server-card:hover .server-card-actions {
   opacity: 1;
+  flex-shrink: 0;
 }
 
 .tag-server {

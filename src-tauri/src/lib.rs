@@ -43,8 +43,6 @@ pub struct Server {
     pub user: String,
     #[serde(default)]
     pub auth_type: String,
-    #[serde(default, alias = "key_path")]
-    pub key_path: String,
     #[serde(default)]
     pub note: String,
     #[serde(default, alias = "created_at")]
@@ -333,7 +331,6 @@ fn add_server(
     port: u16,
     user: String,
     auth_type: String,
-    key_path: String,
     note: String,
 ) -> Result<Server, String> {
     let mut state = state.lock().map_err(|e| e.to_string())?;
@@ -345,7 +342,6 @@ fn add_server(
         port,
         user,
         auth_type,
-        key_path,
         note,
         created_at: now,
     };
@@ -363,7 +359,6 @@ fn update_server(
     port: u16,
     user: String,
     auth_type: String,
-    key_path: String,
     note: String,
 ) -> Result<Server, String> {
     let mut state = state.lock().map_err(|e| e.to_string())?;
@@ -376,7 +371,6 @@ fn update_server(
         port,
         user,
         auth_type,
-        key_path,
         note,
         created_at: state.servers[index].created_at.clone(),
     };
@@ -395,15 +389,6 @@ fn delete_server(state: State<Mutex<AppState>>, id: String) -> Result<(), String
     state.servers.retain(|s| s.id != id);
     state.save_servers()?;
     Ok(())
-}
-
-#[tauri::command]
-fn pick_ssh_key() -> Result<String, String> {
-    let file = rfd::FileDialog::new()
-        .set_title("选择 SSH 秘钥文件")
-        .pick_file()
-        .ok_or_else(|| "未选择文件".to_string())?;
-    Ok(file.to_string_lossy().to_string())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -669,7 +654,6 @@ pub fn run() {
             add_server,
             update_server,
             delete_server,
-            pick_ssh_key,
             scan_directory,
             open_pick_directory,
             terminal_create,

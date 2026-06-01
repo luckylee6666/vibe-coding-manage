@@ -58,6 +58,7 @@ pnpm tauri build
 - **后端**: Rust + Tauri v2
 - **数据存储**: JSON 文件
 - **Excel 导出**: rust_xlsxwriter
+- **内置终端**: portable-pty (真实 PTY) + xterm.js (vendor，无 CDN 依赖)
 
 ## 数据存储位置
 

@@ -11,7 +11,7 @@
     <div class="layout">
       <aside class="sider">
         <div class="sider-logo">
-          <img src="assets/logo.svg" width="32" height="32" alt="logo" />
+          <img src="assets/logo.png" width="32" height="32" alt="logo" />
           <span>Vibe Coding</span>
         </div>
         <nav class="sider-menu">
@@ -166,7 +166,7 @@
               <svg class="confirm-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                 <path d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/>
               </svg>
-              <p>确定要删除项目 <strong id="delete-project-name"></strong> 吗？</p>
+              <p>确定要删除<span id="confirm-kind">项目</span> <strong id="delete-project-name"></strong> 吗？</p>
             </div>
           </div>
           <div class="modal-footer">
@@ -210,16 +210,6 @@
                   <option value="password">密码</option>
                   <option value="key">秘钥</option>
                 </select>
-              </div>
-              <div class="form-item" id="auth-password-wrap">
-                <div class="form-hint">出于安全考虑不保存密码，连接时请手动输入。</div>
-              </div>
-              <div class="form-item" id="auth-key-wrap" style="display:none;">
-                <label class="form-label required">秘钥路径</label>
-                <div class="form-input-group">
-                  <input class="form-input" type="text" id="server-key-path" placeholder="~/.ssh/id_rsa" />
-                  <button type="button" class="btn btn-default" id="browse-key-btn">选择</button>
-                </div>
               </div>
               <div class="form-item">
                 <label class="form-label">备注</label>

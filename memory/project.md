@@ -12,8 +12,8 @@
 
 ## 远端仓库
 - `git@github.com:luckylee6666/vibe-coding-manage.git`
-- 当前版本: v1.0.0
-- GitHub Actions 自动构建 macOS ARM64 dmg
+- 当前版本: v1.1.0（内置终端 + 服务器管理修复 + 新 logo）
+- GitHub Actions 自动构建 macOS ARM64 dmg（推 `v*` 标签触发）
 
 ## 项目结构
 ```

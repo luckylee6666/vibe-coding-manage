@@ -9,7 +9,7 @@ try {
 let projects = [];
 let servers = [];
 let currentEditId = null;
-let deleteTargetId = null;
+let pendingConfirm = null;
 let activeGroup = 'all';
 let currentServerEditId = null;
 
@@ -58,11 +58,7 @@ const el = {
   serverPort: $('server-port'),
   serverUser: $('server-user'),
   serverAuthType: $('server-auth-type'),
-  serverKeyPath: $('server-key-path'),
   serverNote: $('server-note'),
-  authPasswordWrap: $('auth-password-wrap'),
-  authKeyWrap: $('auth-key-wrap'),
-  browseKeyBtn: $('browse-key-btn'),
   serverCancelBtn: $('server-cancel-btn'),
   serverSubmitBtn: $('server-submit-btn'),
   serverListOverlay: $('server-list-overlay'),
@@ -305,8 +301,6 @@ function bind() {
   el.serverForm.onsubmit = submitServer;
   el.serverSubmitBtn.type = 'button';
   el.serverSubmitBtn.onclick = () => submitServer(new Event('submit'));
-  el.serverAuthType.onchange = () => toggleAuthFields();
-  el.browseKeyBtn.onclick = browseKey;
 
   // 服务器列表弹窗事件
   el.serverListClose.onclick = closeServerList;
@@ -366,15 +360,25 @@ function closeModal() {
   currentEditId = null;
 }
 
-function del(id, name) {
-  deleteTargetId = id;
+// 通用确认弹窗（WKWebView 不支持原生 confirm，统一走应用内弹窗）
+function askConfirm(kind, name, onConfirm) {
+  $('confirm-kind').textContent = kind;
   el.deleteName.textContent = name;
+  pendingConfirm = onConfirm;
   el.confirm.classList.add('active');
+}
+
+function del(id, name) {
+  askConfirm('项目', name, async () => {
+    await invoke('delete_project', { id });
+    msg('删除成功', 'success');
+    await load();
+  });
 }
 
 function closeDel() {
   el.confirm.classList.remove('active');
-  deleteTargetId = null;
+  pendingConfirm = null;
 }
 
 async function browse() {
@@ -435,14 +439,14 @@ async function submit(e) {
 }
 
 async function doDelete() {
-  if (!deleteTargetId) return;
+  if (!pendingConfirm) return;
+  const fn = pendingConfirm;
   try {
-    await invoke('delete_project', { id: deleteTargetId });
-    msg('删除成功', 'success');
-    closeDel();
-    await load();
+    await fn();
   } catch (e) {
-    msg('删除失败', 'error');
+    msg(typeof e === 'string' ? e : (e.message || '删除失败'), 'error');
+  } finally {
+    closeDel();
   }
 }
 
@@ -472,7 +476,6 @@ function openServerModal(s = null) {
     el.serverPort.value = s.port || 22;
     el.serverUser.value = s.user;
     el.serverAuthType.value = s.authType || 'password';
-    el.serverKeyPath.value = s.keyPath || '';
     el.serverNote.value = s.note || '';
   } else {
     el.serverForm.reset();
@@ -480,7 +483,6 @@ function openServerModal(s = null) {
     el.serverPort.value = '22';
     el.serverAuthType.value = 'password';
   }
-  toggleAuthFields();
   el.serverModal.classList.add('active');
   el.serverName.focus();
 }
@@ -488,19 +490,6 @@ function openServerModal(s = null) {
 function closeServerModal() {
   el.serverModal.classList.remove('active');
   currentServerEditId = null;
-}
-
-function toggleAuthFields() {
-  const isKey = el.serverAuthType.value === 'key';
-  el.authPasswordWrap.style.display = isKey ? 'none' : '';
-  el.authKeyWrap.style.display = isKey ? '' : 'none';
-}
-
-async function browseKey() {
-  try {
-    const r = await invoke('pick_ssh_key');
-    if (r) el.serverKeyPath.value = r;
-  } catch (e) {}
 }
 
 async function submitServer(e) {
@@ -516,7 +505,6 @@ async function submitServer(e) {
     port: parseInt(el.serverPort.value) || 22,
     user: el.serverUser.value.trim(),
     authType: el.serverAuthType.value,
-    keyPath: el.serverAuthType.value === 'key' ? el.serverKeyPath.value.trim() : '',
     note: el.serverNote.value.trim(),
   };
   if (currentServerEditId) data.id = currentServerEditId;
@@ -581,16 +569,13 @@ function renderServerList() {
     const s = servers.find(x => x.id === id);
     if (!s) return;
     card.querySelector('.edit-server-btn').onclick = () => { closeServerList(); openServerModal(s); };
-    card.querySelector('.del-server-btn').onclick = async () => {
-      if (!confirm(`确定删除服务器 "${s.name}" 吗？`)) return;
-      try {
+    card.querySelector('.del-server-btn').onclick = () => {
+      askConfirm('服务器', s.name, async () => {
         await invoke('delete_server', { id: s.id });
         msg('删除成功', 'success');
         await load();
         renderServerList();
-      } catch (e) {
-        msg('删除失败', 'error');
-      }
+      });
     };
   });
 }
