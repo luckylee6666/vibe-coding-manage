@@ -61,6 +61,7 @@ src-tauri/
 - **后端命令**（`src-tauri/src/lib.rs`）: `terminal_create(id, cwd, cols, rows)` 起登录 shell `$SHELL -l`（加载 PATH，claude 才找得到）/ `terminal_write(id, data)` / `terminal_resize(id, cols, rows)` / `terminal_close(id)`
 - **输出流**: 后台线程读 PTY → base64（避免切断转义序列/多字节）→ Tauri 事件 `terminal-output`；进程退出推 `terminal-exit`
 - **前端**（`main.js` 终端模块 + `index.html` 底部抽屉 + `styles.css` `.terminal-dock`）: 每会话一个 xterm 实例，`Map` 管理；标签横向滚动、运行/已结束状态点、切换/关闭、拖拽调高度、浮动开关（角标=会话数）
+- **最大化**: 头部「最大化/还原」按钮 `toggleDockMaximize`（`.terminal-dock.maximized { top:0 }` + 高度设 `window.innerHeight`），拖拽上限也放开到满高（原 `innerHeight-120` 会留顶部白边）；窗口 resize 时若处于 maximized 跟随重设高度
 - **入口**: 项目卡片「终端」按钮 → 新标签 + cwd + 自动注入 `claude\r`；面板「＋」→ 空白 shell（home，不跑 claude）
 - 全局名: `window.Terminal` / `window.FitAddon.FitAddon`；事件用 `window.__TAURI__.event.listen`
 - **旧 `open_terminal`（跳系统终端）保留但前端不再调用**，可作未来「外部终端」备选
@@ -88,6 +89,7 @@ src-tauri/
 - **扫描重复导入**: 取消时按 localPath 去重
 - **WKWebView 不支持原生弹窗**: `window.confirm/alert/prompt` 在 Tauri WKWebView 里直接返回 false（删除服务器曾因此「点了没反应」）→ 必须用应用内弹窗。通用确认走 `askConfirm(kind, name, onConfirm)` + `pendingConfirm`，确认弹窗 `z-index:1100` 叠在服务器列表之上
 - **卡片操作按钮**: 服务器卡片编辑/删除按钮原 `opacity:0` 仅 hover 显示，难发现，已改常显
+- **服务器创建后列表不刷新**: `addServerBtn` 点击会先 `closeServerList()` 再开表单；`submitServer` 原本只 `closeServerModal()`+`load()`，没重开列表也没刷下拉 → 提交成功后补 `openServerList()` + 运行环境为 server 时 `renderServerOptions()`
 
 ## 启动命令
 ```bash
@@ -102,4 +104,5 @@ pnpm tauri dev
 - **xterm vendor 配方**: `pnpm add @xterm/xterm @xterm/addon-fit` → 拷 `node_modules/@xterm/xterm/lib/xterm.js`、`css/xterm.css`、`@xterm/addon-fit/lib/addon-fit.js` 到 `src/vendor/`，`<script>` 经典标签在 `main.js`(module) 前引入
 - **PTY/前端联调验证**: 原生窗口没法自动点；用 mock `window.__TAURI__`（回显桩）把真实前端跑进浏览器 + Playwright 驱动，PTY 机制单独用 Rust test 起真 shell 验证（见 lib.rs `test_pty_spawn_echo`）
 - **dev 模式程序坞图标不反映 `icon.icns`**: `pnpm tauri dev` 跑的是裸二进制，macOS 程序坞只显示通用/缓存图标；新图标只在打包的 `.app`/dmg 里生效。验证图标要 `pnpm tauri build` 看 `target/release/bundle/macos/*.app`
+- **标题栏保持系统原生，别用 Overlay**: 曾试过 `titleBarStyle:"Overlay"`+`hiddenTitle` 让内容顶到头，但 macOS 红绿灯会压住侧边栏「Vibe Coding」Logo（窄 220px 侧栏 + logo 换行），用户判定「怪怪的」，明确要求保留原生标题栏（`decorations` 默认 true，不设 titleBarStyle）。结论：本应用不做自定义/透明标题栏
 - **Logo/图标生成**: logo 用 codex 的 `image2` 生图工具生成（`codex exec --sandbox workspace-write -C <repo> "用 image2 ..." < /dev/null`，**后台跑必须 `< /dev/null` 否则卡在读 stdin**）→ 存 `src/assets/logo.png`（侧边栏引用）→ `pnpm tauri icon src/assets/logo.png` 生成全套图标（会多出 ios/android 目录，macOS 桌面应用可删）
