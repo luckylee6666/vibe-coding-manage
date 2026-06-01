@@ -1129,6 +1129,11 @@ body {
   display: flex;
 }
 
+/* 最大化：占满整个窗口，顶到头不留白 */
+.terminal-dock.maximized {
+  top: 0;
+}
+
 .terminal-resize {
   position: absolute;
   top: -3px;

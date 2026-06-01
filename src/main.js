@@ -323,9 +323,13 @@ function bind() {
   // 内置终端
   termEl.fab.onclick = () => { sessions.size ? openDock() : createSession({}); };
   termEl.collapseBtn.onclick = collapseDock;
+  termEl.maximizeBtn.onclick = toggleDockMaximize;
   termEl.newBtn.onclick = () => createSession({});
   setupTermResize();
-  window.addEventListener('resize', () => { if (activeSession) fitSession(activeSession); });
+  window.addEventListener('resize', () => {
+    if (termEl.dock.classList.contains('maximized')) termEl.dock.style.height = window.innerHeight + 'px';
+    if (activeSession) fitSession(activeSession);
+  });
 }
 
 function openModal(p = null) {
@@ -519,6 +523,10 @@ async function submitServer(e) {
     }
     closeServerModal();
     await load();
+    // 刷新服务器列表并重新打开，确保新数据可见
+    openServerList();
+    // 同步刷新项目表单中的服务器下拉（运行环境为服务器时）
+    if (el.machine.value === 'server') renderServerOptions();
   } catch (e) {
     console.error('服务器操作失败:', e);
     msg('操作失败: ' + (e.message || e), 'error');
@@ -724,6 +732,7 @@ const termEl = {
   bodies: $('terminal-bodies'),
   resize: $('terminal-resize'),
   newBtn: $('terminal-new-btn'),
+  maximizeBtn: $('terminal-maximize-btn'),
   collapseBtn: $('terminal-collapse-btn'),
   fab: $('terminal-fab'),
   fabBadge: $('terminal-fab-badge'),
@@ -768,6 +777,21 @@ function openDock() {
 function collapseDock() {
   termEl.dock.classList.remove('active');
   termEl.fab.classList.remove('hidden');
+}
+
+// 最大化/还原终端抽屉，最大化时占满整个窗口高度、不留顶部白边
+let dockPrevHeight = null;
+function toggleDockMaximize() {
+  const maxed = termEl.dock.classList.toggle('maximized');
+  if (maxed) {
+    dockPrevHeight = termEl.dock.offsetHeight;
+    termEl.dock.style.height = window.innerHeight + 'px';
+    termEl.maximizeBtn.title = '还原';
+  } else {
+    termEl.dock.style.height = (dockPrevHeight || 340) + 'px';
+    termEl.maximizeBtn.title = '最大化';
+  }
+  if (activeSession) requestAnimationFrame(() => fitSession(activeSession));
 }
 
 function updateFabBadge() {
@@ -874,7 +898,7 @@ function setupTermResize() {
   let startY = 0;
   let startH = 0;
   const onMove = (e) => {
-    const h = Math.min(Math.max(startH + (startY - e.clientY), 160), window.innerHeight - 120);
+    const h = Math.min(Math.max(startH + (startY - e.clientY), 160), window.innerHeight);
     termEl.dock.style.height = h + 'px';
     if (activeSession) fitSession(activeSession);
   };

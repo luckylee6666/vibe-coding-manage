@@ -52,11 +52,10 @@ src-tauri/
 - port: u16 (默认 22)
 - user: String
 - auth_type: String → authType (password/key)
-- key_path: String → keyPath（秘钥路径）
 - note: String
 - created_at: String → createdAt
 
-**注意**: 不存储密码，只记录登录方式。密码连接时手动输入。服务器表单已移除密码输入框（之前会被静默丢弃），改为提示文字。
+**注意**: **只记录登录方式（password/key），不存密码、不存秘钥路径**。表单里登录方式下拉框下面没有任何额外输入框（密码框、秘钥路径框、提示框都已删除）。Rust 侧 `Server.key_path` 字段、`add_server`/`update_server` 的 `key_path` 参数、`pick_ssh_key` 命令均已移除；旧 `servers.json` 残留的 `keyPath` 会被 serde 自动忽略。
 
 ## 内置终端（底部抽屉，多标签）
 - **后端命令**（`src-tauri/src/lib.rs`）: `terminal_create(id, cwd, cols, rows)` 起登录 shell `$SHELL -l`（加载 PATH，claude 才找得到）/ `terminal_write(id, data)` / `terminal_resize(id, cols, rows)` / `terminal_close(id)`
@@ -69,7 +68,7 @@ src-tauri/
 ## 已完成功能
 - [x] 项目 CRUD
 - [x] 运行环境：本地电脑 / 服务器
-- [x] 服务器管理（IP、端口、用户名、密码/秘钥方式、秘钥路径）
+- [x] 服务器管理（IP、端口、用户名、密码/秘钥登录方式；仅记录方式不存凭据）
 - [x] 项目分组（侧边栏展开/折叠，点击子项目定位高亮）
 - [x] 搜索功能
 - [x] 导出 Excel（含服务器列）
@@ -84,9 +83,11 @@ src-tauri/
 - **serde 兼容**: Project 加 `#[serde(rename_all = "camelCase")]` + `alias` 兼容旧 snake_case 数据
 - **submit 双重触发**: 确定按钮设 `type="button"` 避免触发 form 原生 submit
 - **服务器删除保护**: 检查是否有项目引用该 server_id，有则阻止删除
-- **密码不存储**: Server 模型不含 password 字段；表单密码框已移除改提示
+- **不存凭据**: Server 不含 password/key_path，只记登录方式；表单仅留「登录方式」下拉
 - **终端路径含空格/注入**: `open_terminal` 与 PTY cwd 用 `shell_quote()` 单引号包裹，macOS 再做 AppleScript 两层转义
 - **扫描重复导入**: 取消时按 localPath 去重
+- **WKWebView 不支持原生弹窗**: `window.confirm/alert/prompt` 在 Tauri WKWebView 里直接返回 false（删除服务器曾因此「点了没反应」）→ 必须用应用内弹窗。通用确认走 `askConfirm(kind, name, onConfirm)` + `pendingConfirm`，确认弹窗 `z-index:1100` 叠在服务器列表之上
+- **卡片操作按钮**: 服务器卡片编辑/删除按钮原 `opacity:0` 仅 hover 显示，难发现，已改常显
 
 ## 启动命令
 ```bash
@@ -100,3 +101,5 @@ pnpm tauri dev
 - macOS ARM64 打包：推送 `v*` 标签触发 GitHub Actions 自动构建 dmg
 - **xterm vendor 配方**: `pnpm add @xterm/xterm @xterm/addon-fit` → 拷 `node_modules/@xterm/xterm/lib/xterm.js`、`css/xterm.css`、`@xterm/addon-fit/lib/addon-fit.js` 到 `src/vendor/`，`<script>` 经典标签在 `main.js`(module) 前引入
 - **PTY/前端联调验证**: 原生窗口没法自动点；用 mock `window.__TAURI__`（回显桩）把真实前端跑进浏览器 + Playwright 驱动，PTY 机制单独用 Rust test 起真 shell 验证（见 lib.rs `test_pty_spawn_echo`）
+- **dev 模式程序坞图标不反映 `icon.icns`**: `pnpm tauri dev` 跑的是裸二进制，macOS 程序坞只显示通用/缓存图标；新图标只在打包的 `.app`/dmg 里生效。验证图标要 `pnpm tauri build` 看 `target/release/bundle/macos/*.app`
+- **Logo/图标生成**: logo 用 codex 的 `image2` 生图工具生成（`codex exec --sandbox workspace-write -C <repo> "用 image2 ..." < /dev/null`，**后台跑必须 `< /dev/null` 否则卡在读 stdin**）→ 存 `src/assets/logo.png`（侧边栏引用）→ `pnpm tauri icon src/assets/logo.png` 生成全套图标（会多出 ios/android 目录，macOS 桌面应用可删）
