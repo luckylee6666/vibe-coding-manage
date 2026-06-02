@@ -8,10 +8,12 @@
 - **运行环境** — 本地电脑 / 服务器
 - **服务器管理** — 配置 SSH 服务器（IP、端口、用户名、密码/秘钥登录方式）
 - **分组管理** — 项目分组，侧边栏展开/折叠，点击定位
-- **内置终端** — 应用内底部抽屉多标签终端，一键在项目目录启动 Claude Code，所有会话集中管理
+- **内置终端** — 应用内底部抽屉多标签终端，集中管理所有会话；支持文件树导览、文件高亮预览、配色主题、字号调整、拖拽插路径（详见下方[内置终端使用](#内置终端使用)）
+- **多 AI CLI 启动** — 项目卡片一键在项目目录启动 **Claude / Codex / opencode**，标签上有工具色标区分
 - **扫描导入** — 扫描目录批量导入 git 项目（自动读取 remote、按路径去重）
 - **搜索过滤** — 快速搜索项目名称、路径、描述
 - **数据导出** — 导出项目数据为 Excel 文件
+- **跨平台** — macOS (Apple Silicon) + Windows (x64 / ARM64)
 - **本地存储** — 数据自动保存到本地 JSON 文件
 
 ## 项目信息字段
@@ -24,9 +26,33 @@
 - 服务器关联
 - 项目描述
 
+## 内置终端使用
+
+底部抽屉式终端，点项目卡片的终端图标或右下角悬浮按钮打开。
+
+**启动 AI CLI**
+- 点项目卡片上的终端图标 → 弹出菜单，选 **打开 Claude / 打开 Codex / 打开 opencode**
+- 自动新建标签、`cd` 到项目目录并运行对应命令；标签上显示工具色标（claude 橙 / codex 蓝 / opencode 绿）
+- 面板左上「＋」开一个空白终端（不跑任何 CLI）
+- 前提：`codex`、`opencode` 需已安装并在 PATH 中（终端走登录 shell，能找到）
+
+**文件树 + 预览**（左侧）
+- 树根为当前标签所在项目目录，切换标签自动跟随；点文件夹懒加载展开
+- **单击文件** → 右侧只读高亮预览；**双击文件** → 把路径插入当前终端
+- 拖动中间分隔条调整树宽；点工具栏文件夹图标可收起/展开文件树
+
+**配色主题**
+- 点工具栏调色板图标切换：**默认深色** / **Homebrew**（黑底绿字），选择会被记住
+
+**字号调整**
+- `⌘/Ctrl +` 放大、`⌘/Ctrl -` 缩小、`⌘/Ctrl 0` 复位，或 `⌘/Ctrl + 滚轮`
+
+**拖拽插路径**
+- 从 Finder / 资源管理器拖文件或文件夹到终端面板 → 自动把路径（含空格会加引号）写入当前终端
+
 ## 截图
 
-> 深色主题 UI，Ant Design 风格
+> 深色主题 UI，Ant Design 风格；终端支持默认深色 / Homebrew 配色切换
 
 ## 开发环境要求
 
@@ -58,7 +84,8 @@ pnpm tauri build
 - **后端**: Rust + Tauri v2
 - **数据存储**: JSON 文件
 - **Excel 导出**: rust_xlsxwriter
-- **内置终端**: portable-pty (真实 PTY) + xterm.js (vendor，无 CDN 依赖)
+- **内置终端**: portable-pty (真实 PTY，跨平台；Windows 走 ConPTY/PowerShell) + xterm.js (vendor)
+- **文件高亮**: highlight.js (vendor，atom-one-dark 主题，无 CDN 依赖)
 
 ## 数据存储位置
 
@@ -70,7 +97,13 @@ pnpm tauri build
 
 ## 下载
 
-前往 [Releases](https://github.com/luckylee6666/vibe-coding-manage/releases) 下载 macOS ARM64 (Apple Silicon) 版本。
+前往 [Releases](https://github.com/luckylee6666/vibe-coding-manage/releases) 下载对应平台版本：
+
+| 平台 | 文件 |
+| --- | --- |
+| macOS (Apple Silicon) | `VibeCodingManager_x.y.z_aarch64.dmg` |
+| Windows x64 | `..._x64-setup.exe`（安装版）或 `..._x64_en-US.msi` |
+| Windows ARM64 | `..._arm64-setup.exe`（安装版）或 `..._arm64_en-US.msi`（Surface / 骁龙等 ARM 设备）|
 
 ### macOS 安装说明
 
@@ -81,3 +114,11 @@ pnpm tauri build
 3. 打开 **系统设置 → 隐私与安全性**，滚动到底部
 4. 在"安全性"区域会看到 `"Vibe Coding Manager"已被阻止打开，因为它来自未验证的开发者`
 5. 点击 **仍要打开**，输入密码确认即可
+
+### Windows 安装说明
+
+应用未签名，首次运行会弹出 SmartScreen 提示：
+
+1. 下载对应架构的 `*-setup.exe` 双击安装
+2. 若弹出 **"Windows 已保护你的电脑"**，点 **更多信息 → 仍要运行**
+3. 按 x64 / ARM64 选择对应自己 CPU 架构的安装包
