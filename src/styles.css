@@ -1134,6 +1134,25 @@ body {
   top: 0;
 }
 
+/* 拖拽文件/文件夹悬停到面板上方的高亮提示 */
+.terminal-dock.drag-target {
+  box-shadow: inset 0 0 0 2px var(--blue), 0 -8px 28px rgba(0, 0, 0, 0.28);
+}
+
+.terminal-dock.drag-target .terminal-bodies::after {
+  content: '松开以插入路径';
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  color: #e6eaf2;
+  background: rgba(22, 119, 255, 0.12);
+  pointer-events: none;
+  z-index: 5;
+}
+
 .terminal-resize {
   position: absolute;
   top: -3px;
@@ -1275,6 +1294,84 @@ body {
 .term-tool-btn svg {
   width: 16px;
   height: 16px;
+}
+
+/* 配色主题切换下拉 */
+.term-theme-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.term-theme-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 176px;
+  padding: 4px;
+  background: #232936;
+  border: 1px solid #2b313d;
+  border-radius: 8px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+  z-index: 20;
+  display: none;
+}
+
+.term-theme-menu.active {
+  display: block;
+}
+
+.term-theme-opt {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 9px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #aeb6c4;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.12s, color 0.12s;
+}
+
+.term-theme-opt:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #e6eaf2;
+}
+
+.term-theme-opt.active {
+  color: #fff;
+}
+
+.term-theme-swatch {
+  display: flex;
+  width: 32px;
+  height: 16px;
+  border-radius: 4px;
+  overflow: hidden;
+  flex-shrink: 0;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.term-theme-swatch i {
+  flex: 1;
+}
+
+.term-theme-label {
+  flex: 1;
+  white-space: nowrap;
+}
+
+.term-theme-check {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  color: var(--blue);
+  opacity: 0;
+}
+
+.term-theme-opt.active .term-theme-check {
+  opacity: 1;
 }
 
 .terminal-bodies {

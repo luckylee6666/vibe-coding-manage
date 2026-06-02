@@ -325,6 +325,28 @@ function bind() {
   termEl.collapseBtn.onclick = collapseDock;
   termEl.maximizeBtn.onclick = toggleDockMaximize;
   termEl.newBtn.onclick = () => createSession({});
+  termEl.themeBtn.onclick = (e) => {
+    e.stopPropagation();
+    termEl.themeMenu.classList.contains('active') ? closeThemeMenu() : openThemeMenu();
+  };
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.term-theme-wrap')) closeThemeMenu();
+  });
+  // 终端字号快捷键：⌘/Ctrl + 加号放大、减号缩小、0 复位（capture 阶段抢在 xterm 之前）
+  document.addEventListener('keydown', (e) => {
+    if (!termEl.dock.classList.contains('active')) return;
+    if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
+    if (e.key === '=' || e.key === '+') { e.preventDefault(); setTermFontSize(currentFontSize + 1); }
+    else if (e.key === '-' || e.key === '_') { e.preventDefault(); setTermFontSize(currentFontSize - 1); }
+    else if (e.key === '0') { e.preventDefault(); setTermFontSize(TERM_FONT_DEFAULT); }
+  }, true);
+  // ⌘/Ctrl + 滚轮缩放字号
+  termEl.bodies.addEventListener('wheel', (e) => {
+    if (!(e.metaKey || e.ctrlKey)) return;
+    e.preventDefault();
+    setTermFontSize(currentFontSize + (e.deltaY < 0 ? 1 : -1));
+  }, { passive: false });
+  termEl.bodies.style.background = TERM_THEMES[currentTheme].theme.background;
   setupTermResize();
   window.addEventListener('resize', () => {
     if (termEl.dock.classList.contains('maximized')) termEl.dock.style.height = window.innerHeight + 'px';
@@ -732,11 +754,40 @@ const termEl = {
   bodies: $('terminal-bodies'),
   resize: $('terminal-resize'),
   newBtn: $('terminal-new-btn'),
+  themeBtn: $('terminal-theme-btn'),
+  themeMenu: $('terminal-theme-menu'),
   maximizeBtn: $('terminal-maximize-btn'),
   collapseBtn: $('terminal-collapse-btn'),
   fab: $('terminal-fab'),
   fabBadge: $('terminal-fab-badge'),
 };
+
+// 终端配色方案
+const TERM_THEMES = {
+  // 上一版原色（深蓝灰底）
+  'classic': {
+    name: '默认深色',
+    theme: { background: '#14171e', foreground: '#e6eaf2', cursor: '#1677ff' },
+  },
+  // macOS 终端 Homebrew 描述文件：黑底绿字 + 标准 ANSI 调色板
+  'homebrew': {
+    name: 'Homebrew',
+    theme: {
+      background: '#000000', foreground: '#00ff00', cursor: '#23ff18', selectionBackground: '#0860a8',
+      black: '#000000', red: '#990000', green: '#00a600', yellow: '#999900',
+      blue: '#0000b2', magenta: '#b200b2', cyan: '#00a6b2', white: '#bfbfbf',
+      brightBlack: '#666666', brightRed: '#e50000', brightGreen: '#00d900', brightYellow: '#e5e500',
+      brightBlue: '#0000ff', brightMagenta: '#e500e5', brightCyan: '#00e5e5', brightWhite: '#e5e5e5',
+    },
+  },
+};
+let currentTheme = localStorage.getItem('term-theme') || 'classic';
+if (!TERM_THEMES[currentTheme]) currentTheme = 'classic';
+
+// 终端字号（⌘+ / ⌘- / ⌘0 调整，⌘+滚轮缩放，持久化）
+const TERM_FONT_MIN = 8, TERM_FONT_MAX = 32, TERM_FONT_DEFAULT = 13;
+let currentFontSize = parseInt(localStorage.getItem('term-fontsize'), 10) || TERM_FONT_DEFAULT;
+if (currentFontSize < TERM_FONT_MIN || currentFontSize > TERM_FONT_MAX) currentFontSize = TERM_FONT_DEFAULT;
 
 const sessions = new Map(); // id -> { term, fit, tabEl, bodyEl, name, status }
 let activeSession = null;
@@ -766,6 +817,79 @@ async function bindTermEvents() {
       s.term.write('\r\n\x1b[90m[会话已结束]\x1b[0m\r\n');
     }
   });
+
+  // 拖拽文件/文件夹到终端面板 → 把路径写入当前会话（同 macOS 终端）
+  const overDock = (pos) => {
+    if (!pos || !termEl.dock.classList.contains('active')) return false;
+    const dpr = window.devicePixelRatio || 1;
+    const x = pos.x / dpr, y = pos.y / dpr;
+    const r = termEl.dock.getBoundingClientRect();
+    return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+  };
+  await listen('tauri://drag-over', e => {
+    termEl.dock.classList.toggle('drag-target', overDock(e.payload && e.payload.position));
+  });
+  await listen('tauri://drag-leave', () => {
+    termEl.dock.classList.remove('drag-target');
+  });
+  await listen('tauri://drag-drop', e => {
+    termEl.dock.classList.remove('drag-target');
+    const p = e.payload || {};
+    if (!overDock(p.position) || !activeSession) return;
+    const paths = (p.paths || []).filter(Boolean);
+    if (!paths.length) return;
+    const data = paths.map(shellQuotePath).join(' ') + ' ';
+    invoke('terminal_write', { id: activeSession, data }).catch(() => {});
+    sessions.get(activeSession)?.term.focus();
+  });
+}
+
+// shell 路径转义：无特殊字符直出，否则单引号包裹（内部单引号转 '\''）
+function shellQuotePath(p) {
+  if (/^[A-Za-z0-9_@%+=:,./~-]+$/.test(p)) return p;
+  return "'" + p.replace(/'/g, "'\\''") + "'";
+}
+
+// 应用配色方案：更新所有已开会话 + 终端面板背景，并持久化
+function setTermTheme(key) {
+  if (!TERM_THEMES[key]) return;
+  currentTheme = key;
+  localStorage.setItem('term-theme', key);
+  const t = TERM_THEMES[key].theme;
+  sessions.forEach(s => { s.term.options.theme = t; });
+  termEl.bodies.style.background = t.background;
+  renderThemeMenu();
+}
+
+function renderThemeMenu() {
+  termEl.themeMenu.innerHTML = '';
+  Object.entries(TERM_THEMES).forEach(([key, def]) => {
+    const t = def.theme;
+    const opt = document.createElement('div');
+    opt.className = 'term-theme-opt' + (key === currentTheme ? ' active' : '');
+    // 无完整 ANSI 调色板的主题（如默认深色）回退到 前景/光标 色，色卡不留空
+    const sw = [t.background, t.red || t.foreground, t.green || t.cursor, t.blue || t.cursor, t.yellow || t.foreground];
+    opt.innerHTML =
+      `<span class="term-theme-swatch">` +
+      sw.map(c => `<i style="background:${c}"></i>`).join('') +
+      `</span>` +
+      `<span class="term-theme-label">${esc(def.name)}</span>` +
+      `<svg class="term-theme-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M5 13l4 4L19 7"/></svg>`;
+    opt.onclick = () => { setTermTheme(key); closeThemeMenu(); };
+    termEl.themeMenu.appendChild(opt);
+  });
+}
+
+function openThemeMenu() { renderThemeMenu(); termEl.themeMenu.classList.add('active'); }
+function closeThemeMenu() { termEl.themeMenu.classList.remove('active'); }
+
+// 调整终端字号：更新所有会话 + 重新 fit（行列数随字号变），并持久化
+function setTermFontSize(size) {
+  size = Math.max(TERM_FONT_MIN, Math.min(TERM_FONT_MAX, size));
+  if (size === currentFontSize) return;
+  currentFontSize = size;
+  localStorage.setItem('term-fontsize', String(size));
+  sessions.forEach((s, id) => { s.term.options.fontSize = size; fitSession(id); });
 }
 
 function openDock() {
@@ -863,11 +987,11 @@ async function createSession({ cwd = '', name = '', autoClaude = false }) {
   };
 
   const term = new window.Terminal({
-    fontSize: 13,
+    fontSize: currentFontSize,
     fontFamily: '"JetBrains Mono", Menlo, Monaco, "Courier New", monospace',
     cursorBlink: true,
     scrollback: 5000,
-    theme: { background: '#14171e', foreground: '#e6eaf2', cursor: '#1677ff' },
+    theme: TERM_THEMES[currentTheme].theme,
   });
   const fit = new window.FitAddon.FitAddon();
   term.loadAddon(fit);
