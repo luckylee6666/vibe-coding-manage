@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Vibe Coding Manager</title>
     <link rel="stylesheet" href="vendor/xterm.css" />
+    <link rel="stylesheet" href="vendor/highlight-atom-one-dark.css" />
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
@@ -281,6 +282,9 @@
           <button class="term-tool-btn" id="terminal-new-btn" title="新建终端">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 4.5v15m7.5-7.5h-15"/></svg>
           </button>
+          <button class="term-tool-btn" id="terminal-tree-btn" title="文件树">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 5.25h7.5l1.5 2.25H21v11.25a.75.75 0 01-.75.75H3.75A.75.75 0 013 18.75z"/></svg>
+          </button>
           <div class="term-theme-wrap">
             <button class="term-tool-btn" id="terminal-theme-btn" title="配色主题">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3a9 9 0 100 18h1.6a2.4 2.4 0 002.4-2.4c0-.63-.25-1.2-.65-1.62a2.36 2.36 0 01-.65-1.6 2.4 2.4 0 012.4-2.38H19a3 3 0 003-3C22 6.13 17.97 3 12 3z"/><circle cx="7.5" cy="11.5" r="1.1" fill="currentColor" stroke="none"/><circle cx="11" cy="7.5" r="1.1" fill="currentColor" stroke="none"/><circle cx="16" cy="9" r="1.1" fill="currentColor" stroke="none"/></svg>
@@ -295,7 +299,49 @@
           </button>
         </div>
       </div>
-      <div class="terminal-bodies" id="terminal-bodies"></div>
+      <div class="terminal-main">
+        <aside class="terminal-tree" id="terminal-tree">
+          <div class="tree-head">
+            <span class="tree-root-name" id="tree-root-name" title="">文件树</span>
+            <button class="tree-head-btn" id="tree-refresh-btn" title="刷新">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12a8 8 0 0114-5.3L20 8m0 0V3m0 5h-5M20 12a8 8 0 01-14 5.3L4 16m0 0v5m0-5h5"/></svg>
+            </button>
+          </div>
+          <div class="tree-body" id="tree-body"></div>
+        </aside>
+        <div class="tree-splitter" id="tree-splitter"></div>
+        <div class="terminal-content">
+          <div class="terminal-bodies" id="terminal-bodies"></div>
+          <div class="file-preview" id="file-preview">
+            <div class="file-preview-head">
+              <span class="file-preview-name" id="file-preview-name"></span>
+              <button class="term-tool-btn" id="file-preview-insert" title="把路径插入终端">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 9l5 5 5-5M12 14V3"/></svg>
+              </button>
+              <button class="term-tool-btn" id="file-preview-close" title="关闭预览">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 18L18 6M6 6l12 12"/></svg>
+              </button>
+            </div>
+            <div class="file-preview-body" id="file-preview-body"><pre><code id="file-preview-code" class="hljs"></code></pre></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 项目「打开终端」的 AI CLI 选择菜单 -->
+    <div class="launch-menu" id="launch-menu">
+      <div class="launch-item" data-cmd="claude">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6.75 7.5l3 2.25-3 2.25m4.5 0h3M3.375 3h17.25c.621 0 1.125.504 1.125 1.125v15.75c0 .621-.504 1.125-1.125 1.125H3.375c-.621 0-1.125-.504-1.125-1.125V4.125C2.25 3.504 2.754 3 3.375 3z"/></svg>
+        <span>打开 Claude</span>
+      </div>
+      <div class="launch-item" data-cmd="codex">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6.75 7.5l3 2.25-3 2.25m4.5 0h3M3.375 3h17.25c.621 0 1.125.504 1.125 1.125v15.75c0 .621-.504 1.125-1.125 1.125H3.375c-.621 0-1.125-.504-1.125-1.125V4.125C2.25 3.504 2.754 3 3.375 3z"/></svg>
+        <span>打开 Codex</span>
+      </div>
+      <div class="launch-item" data-cmd="opencode">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6.75 7.5l3 2.25-3 2.25m4.5 0h3M3.375 3h17.25c.621 0 1.125.504 1.125 1.125v15.75c0 .621-.504 1.125-1.125 1.125H3.375c-.621 0-1.125-.504-1.125-1.125V4.125C2.25 3.504 2.754 3 3.375 3z"/></svg>
+        <span>打开 opencode</span>
+      </div>
     </div>
 
     <!-- 浮动开关：收起时显示，带会话数角标 -->
@@ -306,6 +352,7 @@
 
     <script src="vendor/xterm.js"></script>
     <script src="vendor/addon-fit.js"></script>
+    <script src="vendor/highlight.min.js"></script>
     <script type="module" src="main.js"></script>
   </body>
 </html>

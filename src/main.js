@@ -75,6 +75,7 @@ const el = {
   scanEmpty: $('scan-empty'),
   scanCancelBtn: $('scan-cancel-btn'),
   scanImportBtn: $('scan-import-btn'),
+  launchMenu: $('launch-menu'),
 };
 
 async function init() {
@@ -253,7 +254,10 @@ function render(list) {
     const id = card.dataset.id;
     const p = projects.find(x => x.id === id);
     if (!p) return;
-    card.querySelector('.terminal-btn').onclick = () => openTerminal(p);
+    card.querySelector('.terminal-btn').onclick = (ev) => {
+      ev.stopPropagation();
+      openLaunchMenu(p, ev.currentTarget);
+    };
     card.querySelector('.edit-btn').onclick = () => openModal(p);
     card.querySelector('.del-btn').onclick = () => del(p.id, p.name);
   });
@@ -320,6 +324,21 @@ function bind() {
   el.scanModal.onclick = e => { if (e.target === el.scanModal) closeScanModal(); };
   el.scanImportBtn.onclick = importScanned;
 
+  // 「打开终端」AI CLI 选择菜单
+  el.launchMenu.querySelectorAll('.launch-item').forEach(item => {
+    item.onclick = () => {
+      const cmd = item.dataset.cmd;
+      const p = launchMenuProject;
+      closeLaunchMenu();
+      if (p) openTerminal(p, cmd);
+    };
+  });
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('#launch-menu') && !e.target.closest('.terminal-btn')) closeLaunchMenu();
+  });
+  window.addEventListener('resize', closeLaunchMenu);
+  document.addEventListener('scroll', closeLaunchMenu, true);
+
   // 内置终端
   termEl.fab.onclick = () => { sessions.size ? openDock() : createSession({}); };
   termEl.collapseBtn.onclick = collapseDock;
@@ -348,6 +367,17 @@ function bind() {
   }, { passive: false });
   termEl.bodies.style.background = TERM_THEMES[currentTheme].theme.background;
   setupTermResize();
+  // 文件树 + 内容预览
+  termEl.treeBtn.onclick = toggleTree;
+  termEl.treeRefreshBtn.onclick = () => renderTree(treeRoot);
+  termEl.previewInsert.onclick = () => insertPathToTerminal(termEl.previewInsert.dataset.path || '');
+  termEl.previewClose.onclick = closePreview;
+  setupTreeSplitter();
+  const savedTreeW = parseInt(localStorage.getItem('term-tree-width'), 10);
+  if (savedTreeW >= 140 && savedTreeW <= 480) termEl.tree.style.width = savedTreeW + 'px';
+  const treeHidden = localStorage.getItem('term-tree-hidden') === '1';
+  termEl.tree.classList.toggle('hidden', treeHidden);
+  termEl.treeBtn.classList.toggle('active', !treeHidden);
   window.addEventListener('resize', () => {
     if (termEl.dock.classList.contains('maximized')) termEl.dock.style.height = window.innerHeight + 'px';
     if (activeSession) fitSession(activeSession);
@@ -416,13 +446,31 @@ async function browse() {
   }
 }
 
-async function openTerminal(p) {
+async function openTerminal(p, cmd) {
   try {
-    await createSession({ cwd: p.localPath, name: p.name, autoClaude: true });
+    await createSession({ cwd: p.localPath, name: p.name, autoCmd: cmd });
   } catch (e) {
     console.error('打开终端失败:', e);
     msg('打开终端失败: ' + (e.message || e), 'error');
   }
+}
+
+// 「打开终端」AI CLI 选择菜单（固定定位，锚到点击的按钮）
+let launchMenuProject = null;
+function openLaunchMenu(p, anchorEl) {
+  launchMenuProject = p;
+  const menu = el.launchMenu;
+  menu.classList.add('active'); // 先显示以测量尺寸
+  const r = anchorEl.getBoundingClientRect();
+  let left = Math.max(8, r.right - menu.offsetWidth);
+  let top = r.bottom + 4;
+  if (top + menu.offsetHeight > window.innerHeight - 8) top = r.top - menu.offsetHeight - 4;
+  menu.style.left = left + 'px';
+  menu.style.top = top + 'px';
+}
+function closeLaunchMenu() {
+  el.launchMenu.classList.remove('active');
+  launchMenuProject = null;
 }
 
 async function submit(e) {
@@ -754,12 +802,24 @@ const termEl = {
   bodies: $('terminal-bodies'),
   resize: $('terminal-resize'),
   newBtn: $('terminal-new-btn'),
+  treeBtn: $('terminal-tree-btn'),
   themeBtn: $('terminal-theme-btn'),
   themeMenu: $('terminal-theme-menu'),
   maximizeBtn: $('terminal-maximize-btn'),
   collapseBtn: $('terminal-collapse-btn'),
   fab: $('terminal-fab'),
   fabBadge: $('terminal-fab-badge'),
+  tree: $('terminal-tree'),
+  treeBody: $('tree-body'),
+  treeRootName: $('tree-root-name'),
+  treeRefreshBtn: $('tree-refresh-btn'),
+  treeSplitter: $('tree-splitter'),
+  preview: $('file-preview'),
+  previewName: $('file-preview-name'),
+  previewCode: $('file-preview-code'),
+  previewBody: $('file-preview-body'),
+  previewInsert: $('file-preview-insert'),
+  previewClose: $('file-preview-close'),
 };
 
 // 终端配色方案
@@ -892,6 +952,188 @@ function setTermFontSize(size) {
   sessions.forEach((s, id) => { s.term.options.fontSize = size; fitSession(id); });
 }
 
+// ===== 文件树 + 内容预览 =====
+
+let treeRoot = null;      // 当前树根（活动会话的 cwd）
+let treeActiveRow = null; // 当前选中的文件行
+
+const TREE_ICONS = {
+  folder: '<svg class="tree-icon" viewBox="0 0 24 24" fill="none" stroke="#7aa2cf" stroke-width="1.8"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg>',
+  code: '<svg class="tree-icon" viewBox="0 0 24 24" fill="none" stroke="#98c379" stroke-width="1.9"><path d="M8 9l-3 3 3 3M16 9l3 3-3 3M13 7l-2 10"/></svg>',
+  config: '<svg class="tree-icon" viewBox="0 0 24 24" fill="none" stroke="#e5c07b" stroke-width="1.8"><path d="M4 7h8M17 7h3M4 17h3M12 17h8"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg>',
+  doc: '<svg class="tree-icon" viewBox="0 0 24 24" fill="none" stroke="#61afef" stroke-width="1.7"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4M9 13h6M9 16h6"/></svg>',
+  file: '<svg class="tree-icon" viewBox="0 0 24 24" fill="none" stroke="#8b94a4" stroke-width="1.7"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/></svg>',
+};
+
+// 扩展名 → highlight.js 语言；返回 null 走自动识别。仅在该语言已注册时才用。
+const HLJS_EXT = {
+  js: 'javascript', mjs: 'javascript', cjs: 'javascript', jsx: 'javascript',
+  ts: 'typescript', tsx: 'typescript', go: 'go', rs: 'rust', py: 'python',
+  rb: 'ruby', java: 'java', kt: 'kotlin', c: 'c', h: 'c', cpp: 'cpp', cc: 'cpp',
+  cs: 'csharp', php: 'php', swift: 'swift', sh: 'bash', bash: 'bash', zsh: 'bash',
+  lua: 'lua', sql: 'sql', html: 'xml', xml: 'xml', vue: 'xml', css: 'css',
+  scss: 'scss', less: 'less', json: 'json', yaml: 'yaml', yml: 'yaml',
+  toml: 'ini', ini: 'ini', conf: 'ini', md: 'markdown', markdown: 'markdown',
+  dockerfile: 'dockerfile', makefile: 'makefile',
+};
+function hljsLangFor(name) {
+  const lower = name.toLowerCase();
+  let lang = HLJS_EXT[lower] || HLJS_EXT[lower.split('.').pop() || ''];
+  if (lang && window.hljs && window.hljs.getLanguage(lang)) return lang;
+  return null;
+}
+
+function fileIconKey(name) {
+  const ext = (name.split('.').pop() || '').toLowerCase();
+  if (/^(js|mjs|cjs|ts|tsx|jsx|vue|go|rs|py|rb|java|kt|c|h|hpp|cpp|cc|cs|php|swift|sh|bash|zsh|lua|sql|html|css|scss)$/.test(ext)) return 'code';
+  if (/^(json|ya?ml|toml|ini|env|conf|cfg|lock|xml|gradle|properties)$/.test(ext)) return 'config';
+  if (/^(md|markdown|txt|rst|adoc|log)$/.test(ext)) return 'doc';
+  return 'file';
+}
+
+function makeTreeRow(entry, depth) {
+  const row = document.createElement('div');
+  row.className = 'tree-row';
+  row.style.paddingLeft = (8 + depth * 14) + 'px';
+  const chevron = `<svg class="tree-chevron${entry.isDir ? '' : ' leaf'}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M9 6l6 6-6 6"/></svg>`;
+  const icon = entry.isDir ? TREE_ICONS.folder : TREE_ICONS[fileIconKey(entry.name)];
+  row.innerHTML = chevron + icon + `<span class="tree-name">${esc(entry.name)}</span>`;
+
+  if (!entry.isDir) {
+    let clickTimer = null;
+    // 单击=预览，双击=插入路径。延时去抖：双击时取消单击的预览
+    row.onclick = () => {
+      if (clickTimer) return;
+      clickTimer = setTimeout(() => {
+        clickTimer = null;
+        if (treeActiveRow) treeActiveRow.classList.remove('active');
+        treeActiveRow = row;
+        row.classList.add('active');
+        openPreview(entry.path, entry.name);
+      }, 220);
+    };
+    row.ondblclick = () => {
+      if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; }
+      insertPathToTerminal(entry.path);
+    };
+    return [row];
+  }
+
+  const childWrap = document.createElement('div');
+  childWrap.className = 'tree-children';
+  childWrap.style.display = 'none';
+  let loaded = false;
+  row.onclick = async () => {
+    const expanded = row.classList.toggle('expanded');
+    childWrap.style.display = expanded ? '' : 'none';
+    if (expanded && !loaded) {
+      loaded = true;
+      childWrap.innerHTML = '<div class="tree-loading">…</div>';
+      try {
+        const items = await invoke('list_dir', { path: entry.path });
+        childWrap.innerHTML = '';
+        if (!items.length) childWrap.innerHTML = '<div class="tree-empty">空目录</div>';
+        else items.forEach(it => makeTreeRow(it, depth + 1).forEach(n => childWrap.appendChild(n)));
+      } catch (e) {
+        childWrap.innerHTML = `<div class="tree-empty">${esc(String(e))}</div>`;
+        loaded = false;
+      }
+    }
+  };
+  return [row, childWrap];
+}
+
+async function renderTree(cwd) {
+  treeRoot = cwd || null;
+  treeActiveRow = null;
+  if (!cwd) {
+    termEl.treeRootName.textContent = '无目录';
+    termEl.treeRootName.title = '';
+    termEl.treeBody.innerHTML = '<div class="tree-empty">此会话无项目根目录</div>';
+    return;
+  }
+  termEl.treeRootName.textContent = cwd.replace(/\/+$/, '').split('/').pop() || cwd;
+  termEl.treeRootName.title = cwd;
+  termEl.treeBody.innerHTML = '<div class="tree-loading">加载中…</div>';
+  try {
+    const items = await invoke('list_dir', { path: cwd });
+    termEl.treeBody.innerHTML = '';
+    if (!items.length) { termEl.treeBody.innerHTML = '<div class="tree-empty">空目录</div>'; return; }
+    items.forEach(it => makeTreeRow(it, 0).forEach(n => termEl.treeBody.appendChild(n)));
+  } catch (e) {
+    termEl.treeBody.innerHTML = `<div class="tree-empty">${esc(String(e))}</div>`;
+  }
+}
+
+function insertPathToTerminal(path) {
+  if (!activeSession) return;
+  invoke('terminal_write', { id: activeSession, data: shellQuotePath(path) + ' ' }).catch(() => {});
+  sessions.get(activeSession)?.term.focus();
+}
+
+async function openPreview(path, name) {
+  termEl.preview.querySelector('.file-preview-truncated')?.remove();
+  termEl.previewName.textContent = name;
+  termEl.previewName.title = path;
+  termEl.previewInsert.dataset.path = path;
+  termEl.preview.classList.add('active');
+  termEl.previewCode.className = 'hljs';
+  termEl.previewCode.removeAttribute('data-highlighted');
+  termEl.previewCode.textContent = '加载中…';
+  try {
+    const res = await invoke('read_file', { path });
+    termEl.previewCode.removeAttribute('data-highlighted');
+    termEl.previewCode.textContent = res.content;
+    // 先按扩展名定语言（命中则跳过昂贵的全语言自动识别）
+    const lang = hljsLangFor(name);
+    termEl.previewCode.className = lang ? `hljs language-${lang}` : 'hljs';
+    try { window.hljs.highlightElement(termEl.previewCode); } catch (e) {}
+    if (res.truncated) {
+      const note = document.createElement('div');
+      note.className = 'file-preview-truncated';
+      note.textContent = `文件超过 1MB，仅显示前 1MB（共 ${(res.size / 1048576).toFixed(1)} MB）`;
+      termEl.preview.appendChild(note);
+    }
+  } catch (e) {
+    termEl.previewCode.textContent = String(e);
+  }
+}
+
+function closePreview() {
+  termEl.preview.classList.remove('active');
+  if (treeActiveRow) { treeActiveRow.classList.remove('active'); treeActiveRow = null; }
+}
+
+function toggleTree() {
+  const hidden = termEl.tree.classList.toggle('hidden');
+  termEl.treeBtn.classList.toggle('active', !hidden);
+  localStorage.setItem('term-tree-hidden', hidden ? '1' : '0');
+  if (!hidden && treeRoot === null && activeSession) renderTree(sessions.get(activeSession).cwd);
+  if (activeSession) requestAnimationFrame(() => fitSession(activeSession));
+}
+
+function setupTreeSplitter() {
+  let startX = 0, startW = 0;
+  const onMove = (e) => {
+    const w = Math.min(Math.max(startW + (e.clientX - startX), 140), 480);
+    termEl.tree.style.width = w + 'px';
+    if (activeSession) fitSession(activeSession);
+  };
+  const onUp = () => {
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    document.body.style.userSelect = '';
+    localStorage.setItem('term-tree-width', String(termEl.tree.offsetWidth));
+  };
+  termEl.treeSplitter.addEventListener('mousedown', (e) => {
+    startX = e.clientX;
+    startW = termEl.tree.offsetWidth;
+    document.body.style.userSelect = 'none';
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+}
+
 function openDock() {
   termEl.dock.classList.add('active');
   termEl.fab.classList.add('hidden');
@@ -936,12 +1178,15 @@ function fitSession(id) {
 function activateSession(id) {
   const s = sessions.get(id);
   if (!s) return;
+  const rootChanged = s.cwd !== treeRoot;
   activeSession = id;
   sessions.forEach((other, oid) => {
     const on = oid === id;
     other.tabEl.classList.toggle('active', on);
     other.bodyEl.classList.toggle('active', on);
   });
+  closePreview();
+  if (rootChanged) renderTree(s.cwd);
   fitSession(id);
   s.term.focus();
 }
@@ -963,7 +1208,7 @@ async function closeSession(id) {
   updateFabBadge();
 }
 
-async function createSession({ cwd = '', name = '', autoClaude = false }) {
+async function createSession({ cwd = '', name = '', autoCmd = '' }) {
   await bindTermEvents();
   const id = `term-${Date.now()}-${++termSeq}`;
   const label = name || `终端 ${termSeq}`;
@@ -976,9 +1221,13 @@ async function createSession({ cwd = '', name = '', autoClaude = false }) {
   const tabEl = document.createElement('div');
   tabEl.className = 'term-tab';
   tabEl.dataset.id = id;
+  const toolBadge = autoCmd
+    ? `<span class="term-tab-tool tool-${esc(autoCmd)}">${esc(autoCmd)}</span>`
+    : '';
   tabEl.innerHTML =
     `<span class="term-tab-dot"></span>` +
     `<span class="term-tab-name" title="${esc(label)}">${esc(label)}</span>` +
+    toolBadge +
     `<span class="term-tab-close" title="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 18L18 6M6 6l12 12"/></svg></span>`;
   termEl.tabs.appendChild(tabEl);
   tabEl.onclick = (ev) => {
@@ -998,7 +1247,7 @@ async function createSession({ cwd = '', name = '', autoClaude = false }) {
   term.open(bodyEl);
   term.onData(d => invoke('terminal_write', { id, data: d }).catch(() => {}));
 
-  sessions.set(id, { term, fit, tabEl, bodyEl, name: label, status: 'running' });
+  sessions.set(id, { term, fit, tabEl, bodyEl, name: label, status: 'running', cwd });
 
   openDock();
   activateSession(id);
@@ -1008,8 +1257,8 @@ async function createSession({ cwd = '', name = '', autoClaude = false }) {
   try {
     await invoke('terminal_create', { id, cwd, cols: term.cols || 80, rows: term.rows || 24 });
     fitSession(id);
-    if (autoClaude) {
-      setTimeout(() => invoke('terminal_write', { id, data: 'claude\r' }).catch(() => {}), 400);
+    if (autoCmd) {
+      setTimeout(() => invoke('terminal_write', { id, data: autoCmd + '\r' }).catch(() => {}), 400);
     }
   } catch (e) {
     term.write(`\r\n\x1b[31m启动失败: ${e}\x1b[0m\r\n`);

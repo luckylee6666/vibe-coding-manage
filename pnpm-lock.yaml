@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@highlightjs/cdn-assets':
+        specifier: ^11.11.1
+        version: 11.11.1
       '@xterm/addon-fit':
         specifier: ^0.11.0
         version: 0.11.0
@@ -20,6 +23,10 @@ importers:
         version: 2.11.2
 
 packages:
+
+  '@highlightjs/cdn-assets@11.11.1':
+    resolution: {integrity: sha512-VEPdHzwelZ12hEX18BHduqxMZGolcUsrbeokHYxOUIm8X2+M7nx5QPtPeQgRxR9XjhdLv4/7DD5BWOlSrJ3k7Q==}
+    engines: {node: '>=12.0.0'}
 
   '@tauri-apps/cli-darwin-arm64@2.11.2':
     resolution: {integrity: sha512-+4UZzLt+eOAEQCwgd+TqKgyUJMrvx+BgdXLLaqJYmPqzP+nE6YZr/hY6CWLYGQb8jFn99jEkmC6uA3tNvamA1w==}
@@ -104,6 +111,8 @@ packages:
     resolution: {integrity: sha512-TQwDdQGtwwDt+2cgKDLn0IRaSxYu1tSUjgKarSDkUM0ZNiSRXFpjxEsvc/Zgc5kq5omJ+V0a8/kIM2WD3sMOYg==}
 
 snapshots:
+
+  '@highlightjs/cdn-assets@11.11.1': {}
 
   '@tauri-apps/cli-darwin-arm64@2.11.2':
     optional: true

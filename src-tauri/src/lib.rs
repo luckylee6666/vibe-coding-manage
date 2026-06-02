@@ -492,6 +492,80 @@ fn open_pick_directory() -> Result<String, String> {
     Ok(dir.to_string_lossy().to_string())
 }
 
+// ========== 文件树 / 文件预览 ==========
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DirEntryInfo {
+    name: String,
+    path: String,
+    is_dir: bool,
+}
+
+/// 列出目录直接子项（懒加载用），目录在前、再按名称不区分大小写排序。
+#[tauri::command]
+fn list_dir(path: String) -> Result<Vec<DirEntryInfo>, String> {
+    let dir = std::path::Path::new(&path);
+    if !dir.is_dir() {
+        return Err("路径不是目录".to_string());
+    }
+    let mut result = Vec::new();
+    for entry in fs::read_dir(dir).map_err(|e| e.to_string())? {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let p = entry.path();
+        result.push(DirEntryInfo {
+            name: entry.file_name().to_string_lossy().to_string(),
+            path: p.to_string_lossy().to_string(),
+            is_dir: p.is_dir(),
+        });
+    }
+    result.sort_by(|a, b| {
+        b.is_dir
+            .cmp(&a.is_dir)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+    Ok(result)
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FileContent {
+    content: String,
+    truncated: bool,
+    size: u64,
+}
+
+/// 读取文本文件内容预览：>1MB 截断，含 NUL 字节判为二进制拒绝。
+#[tauri::command]
+fn read_file(path: String) -> Result<FileContent, String> {
+    let p = std::path::Path::new(&path);
+    if !p.is_file() {
+        return Err("不是文件".to_string());
+    }
+    const MAX: u64 = 1024 * 1024; // 1MB
+    let size = fs::metadata(p).map_err(|e| e.to_string())?.len();
+    // 只读到上限，避免把超大文件整个读进内存
+    let mut bytes = Vec::new();
+    fs::File::open(p)
+        .map_err(|e| e.to_string())?
+        .take(MAX)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    let probe = &bytes[..bytes.len().min(8000)];
+    if probe.contains(&0) {
+        return Err("二进制文件，无法预览".to_string());
+    }
+    let truncated = size > MAX;
+    Ok(FileContent {
+        content: String::from_utf8_lossy(&bytes).to_string(),
+        truncated,
+        size,
+    })
+}
+
 // ========== 内置终端（PTY）==========
 
 /// 一个活跃的伪终端会话：保留 master（用于 resize）、writer（写入键入）、child（用于 kill）
@@ -656,6 +730,8 @@ pub fn run() {
             delete_server,
             scan_directory,
             open_pick_directory,
+            list_dir,
+            read_file,
             terminal_create,
             terminal_write,
             terminal_resize,

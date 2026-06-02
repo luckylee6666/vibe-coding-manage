@@ -1110,6 +1110,51 @@ body {
   white-space: nowrap;
 }
 
+/* 项目「打开终端」AI CLI 选择菜单 */
+.launch-menu {
+  position: fixed;
+  z-index: 1600;
+  min-width: 172px;
+  padding: 4px;
+  background: var(--bg-0);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  display: none;
+}
+
+.launch-menu.active {
+  display: block;
+}
+
+.launch-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  color: var(--text-1);
+  cursor: pointer;
+  transition: all 0.12s;
+}
+
+.launch-item:hover {
+  background: var(--blue-bg);
+  color: var(--blue);
+}
+
+.launch-item svg {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  color: var(--text-3);
+}
+
+.launch-item:hover svg {
+  color: var(--blue);
+}
+
 /* ========== 内置终端 底部抽屉 ========== */
 .terminal-dock {
   position: fixed;
@@ -1242,6 +1287,33 @@ body {
   text-overflow: ellipsis;
 }
 
+/* 标签上的工具标记 claude / codex / opencode */
+.term-tab-tool {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  border-radius: 4px;
+  letter-spacing: 0.02em;
+  text-transform: lowercase;
+}
+
+.term-tab-tool.tool-claude {
+  color: #d97757;
+  background: rgba(217, 119, 87, 0.16);
+}
+
+.term-tab-tool.tool-codex {
+  color: #6ea8fe;
+  background: rgba(110, 168, 254, 0.16);
+}
+
+.term-tab-tool.tool-opencode {
+  color: #98c379;
+  background: rgba(152, 195, 121, 0.16);
+}
+
 .term-tab-close {
   display: inline-flex;
   align-items: center;
@@ -1288,6 +1360,11 @@ body {
 
 .term-tool-btn:hover {
   background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+
+.term-tool-btn.active {
+  background: rgba(22, 119, 255, 0.22);
   color: #fff;
 }
 
@@ -1374,11 +1451,229 @@ body {
   opacity: 1;
 }
 
-.terminal-bodies {
+/* 终端主体：左文件树 + 右内容 */
+.terminal-main {
+  flex: 1;
+  display: flex;
+  flex-direction: row;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.terminal-tree {
+  width: 240px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: #181c24;
+  border-right: 1px solid #2b313d;
+  overflow: hidden;
+}
+
+.terminal-tree.hidden,
+.terminal-tree.hidden + .tree-splitter {
+  display: none;
+}
+
+.tree-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 6px 0 12px;
+  flex-shrink: 0;
+  border-bottom: 1px solid #2b313d;
+}
+
+.tree-root-name {
+  flex: 1;
+  font-size: 12px;
+  font-weight: 600;
+  color: #c6cdda;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree-head-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: transparent;
+  color: #8b94a4;
+  border-radius: 5px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.tree-head-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+
+.tree-head-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+.tree-body {
+  flex: 1;
+  overflow: auto;
+  padding: 4px 0 8px;
+  user-select: none;
+}
+
+.tree-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding-right: 8px;
+  font-size: 13px;
+  color: #aeb6c4;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tree-row:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.tree-row.active {
+  background: rgba(22, 119, 255, 0.22);
+  color: #fff;
+}
+
+.tree-chevron {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  color: #6b7280;
+  transition: transform 0.12s;
+}
+
+.tree-row.expanded > .tree-chevron {
+  transform: rotate(90deg);
+}
+
+.tree-chevron.leaf {
+  visibility: hidden;
+}
+
+.tree-icon {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+}
+
+.tree-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tree-children {
+  overflow: hidden;
+}
+
+.tree-empty,
+.tree-loading {
+  padding: 16px 12px;
+  font-size: 12px;
+  color: #6b7280;
+  text-align: center;
+}
+
+/* 拖宽分隔条 */
+.tree-splitter {
+  width: 5px;
+  flex-shrink: 0;
+  cursor: ew-resize;
+  background: transparent;
+}
+
+.tree-splitter:hover {
+  background: rgba(22, 119, 255, 0.4);
+}
+
+.terminal-content {
   position: relative;
   flex: 1;
+  min-width: 0;
   overflow: hidden;
   background: #14171e;
+}
+
+.terminal-bodies {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background: #14171e;
+}
+
+/* 文件内容预览：覆盖在终端内容区上 */
+.file-preview {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  display: none;
+  flex-direction: column;
+  background: #14171e;
+}
+
+.file-preview.active {
+  display: flex;
+}
+
+.file-preview-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 6px 0 14px;
+  flex-shrink: 0;
+  background: #1d222c;
+  border-bottom: 1px solid #2b313d;
+}
+
+.file-preview-name {
+  flex: 1;
+  font-size: 13px;
+  color: #e6eaf2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-preview-body {
+  flex: 1;
+  overflow: auto;
+  background: #14171e;
+}
+
+.file-preview-body pre {
+  margin: 0;
+  padding: 10px 14px;
+}
+
+.file-preview-body code {
+  font-family: "JetBrains Mono", Menlo, Monaco, "Courier New", monospace;
+  font-size: 12.5px;
+  line-height: 1.55;
+  background: transparent;
+  white-space: pre;
+}
+
+.file-preview-truncated {
+  padding: 6px 14px;
+  font-size: 12px;
+  color: var(--orange);
+  background: rgba(250, 173, 20, 0.1);
+  border-top: 1px solid #2b313d;
 }
 
 .term-body {
