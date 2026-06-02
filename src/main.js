@@ -680,7 +680,7 @@ function esc(s) {
 
 function short(p) {
   if (!p || p.length <= 30) return p || '';
-  const parts = p.split('/');
+  const parts = p.split(/[/\\]/);
   return parts.length <= 3 ? p : `${parts[0]}/…/${parts.at(-1)}`;
 }
 
@@ -904,8 +904,14 @@ async function bindTermEvents() {
   });
 }
 
-// shell 路径转义：无特殊字符直出，否则单引号包裹（内部单引号转 '\''）
+const IS_WINDOWS = navigator.userAgent.includes('Windows');
+
+// shell 路径转义。Windows(PowerShell/cmd)用双引号；Unix(bash/zsh)用单引号
 function shellQuotePath(p) {
+  if (IS_WINDOWS) {
+    // 含空格或 shell 元字符时双引号包裹（Windows 路径几乎不含 " / $ / 反引号）
+    return /[\s&()^%!,;'`$]/.test(p) ? `"${p}"` : p;
+  }
   if (/^[A-Za-z0-9_@%+=:,./~-]+$/.test(p)) return p;
   return "'" + p.replace(/'/g, "'\\''") + "'";
 }
@@ -1052,7 +1058,7 @@ async function renderTree(cwd) {
     termEl.treeBody.innerHTML = '<div class="tree-empty">此会话无项目根目录</div>';
     return;
   }
-  termEl.treeRootName.textContent = cwd.replace(/\/+$/, '').split('/').pop() || cwd;
+  termEl.treeRootName.textContent = cwd.replace(/[/\\]+$/, '').split(/[/\\]/).pop() || cwd;
   termEl.treeRootName.title = cwd;
   termEl.treeBody.innerHTML = '<div class="tree-loading">加载中…</div>';
   try {

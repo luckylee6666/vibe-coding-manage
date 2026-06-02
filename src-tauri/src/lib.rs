@@ -607,10 +607,17 @@ fn terminal_create(
         })
         .map_err(|e| e.to_string())?;
 
-    // 用用户默认 shell；交互式登录以加载 PATH/别名（claude 通常装在用户 PATH 里）
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
-    let mut cmd = CommandBuilder::new(&shell);
-    cmd.arg("-l");
+    // 选 shell：Unix 用用户默认 shell 的登录交互模式（加载 PATH/别名）；Windows 用 PowerShell
+    #[cfg(not(target_os = "windows"))]
+    let mut cmd = {
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
+        let mut c = CommandBuilder::new(&shell);
+        c.arg("-l");
+        c
+    };
+    #[cfg(target_os = "windows")]
+    let mut cmd = CommandBuilder::new("powershell.exe");
+
     if !cwd.is_empty() && std::path::Path::new(&cwd).is_dir() {
         cmd.cwd(&cwd);
     }
