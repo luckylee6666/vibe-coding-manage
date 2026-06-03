@@ -11,24 +11,17 @@ permissions:
 
 jobs:
   # 先建/更新 Release（集中写 body，避免各平台 job 并行创建时互相覆盖）
+  # body 取自仓库根的 RELEASE_NOTES.md（每次发版更新该文件即可，含本版中英双语更新内容）
   create-release:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - name: Create / update release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: Vibe Coding Manager ${{ github.ref_name }}
-          body: |
-            跨平台桌面版：macOS (Apple Silicon) + Windows (x64 / ARM64)
-
-            **macOS 首次安装：**
-            1. 下载 `.dmg`，打开后拖入 Applications
-            2. 首次打开提示"已取消" → 系统设置 → 隐私与安全性 → 滚到底点 **仍要打开**
-
-            **Windows 首次安装：**
-            - 下载对应架构的 `*-setup.exe` 安装（x64 机器用 x64，Surface/骁龙等 ARM 机器用 arm64）
-            - 未签名会弹 SmartScreen → **更多信息 → 仍要运行**
+          body_path: RELEASE_NOTES.md
 
   build-macos-arm64:
     needs: create-release

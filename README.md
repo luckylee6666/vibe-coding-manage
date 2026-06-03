@@ -1,137 +1,135 @@
 # Vibe Coding Manager
 
-一个用于管理 Vibe Coding 项目的桌面应用，基于 Tauri v2 构建。
+**English** | [中文](README.zh-CN.md) · [Changelog](CHANGELOG.md)
 
-## 功能特性
+A desktop app for managing your Vibe Coding projects, built with Tauri v2.
 
-- **项目管理** — 添加、编辑、删除项目
-- **运行环境** — 本地电脑 / 服务器
-- **服务器管理** — 配置 SSH 服务器（IP、端口、用户名、密码/秘钥登录方式）
-- **分组管理** — 项目分组，侧边栏展开/折叠，点击定位
-- **内置终端** — 应用内底部抽屉多标签终端，集中管理所有会话；支持文件树导览、文件高亮预览、配色主题、字号调整、拖拽插路径（详见下方[内置终端使用](#内置终端使用)）
-- **多 AI CLI 启动** — 项目卡片一键在项目目录启动 **Claude / Codex / opencode**，标签上有工具色标区分
-- **扫描导入** — 扫描目录批量导入 git 项目（自动读取 remote、按路径去重）
-- **搜索过滤** — 快速搜索项目名称、路径、描述
-- **数据导出** — 导出项目数据为 Excel 文件
-- **跨平台** — macOS (Apple Silicon) + Windows (x64 / ARM64)
-- **本地存储** — 数据自动保存到本地 JSON 文件
+## Features
 
-## 项目信息字段
+- **Project management** — add, edit, delete projects
+- **Run target** — local machine / server
+- **Server management** — configure SSH servers (host, port, user, password/key login method)
+- **Grouping** — group projects, collapsible sidebar, click to locate
+- **Built-in terminal** — in-app bottom-drawer tabbed terminal managing all sessions; file tree, file preview, color themes, font size, drag-to-insert path (see [Using the terminal](#using-the-built-in-terminal))
+- **Multi AI CLI launch** — start **Claude / Codex / opencode** in a project directory from the project card, with a tool badge on the tab
+- **Scan & import** — batch-import git projects from a directory (auto-reads remote, dedups by path)
+- **Search** — quickly filter by name, path, description
+- **Export** — export project data to Excel
+- **Cross-platform** — macOS (Apple Silicon) + Windows (x64 / ARM64)
+- **Local storage** — data saved to local JSON files
 
-- 项目名称
-- 本地路径
-- 远端仓库地址
-- 项目分组
-- 运行环境（本地电脑 / 服务器）
-- 服务器关联
-- 项目描述
+## Project fields
 
-## 内置终端使用
+- Name
+- Local path
+- Remote repository URL
+- Group
+- Run target (local / server)
+- Server association
+- Description
 
-底部抽屉式终端，点项目卡片的终端图标或右下角悬浮按钮打开。
+## Using the built-in terminal
 
-**启动 AI CLI**
-- 点项目卡片上的终端图标 → 弹出菜单，选 **打开 Claude / 打开 Codex / 打开 opencode**
-- 自动新建标签、`cd` 到项目目录并运行对应命令；标签上显示工具色标（claude 橙 / codex 蓝 / opencode 绿）
-- 面板左上「＋」开一个空白终端（不跑任何 CLI）
-- 前提：`codex`、`opencode` 需已安装并在 PATH 中（终端走登录 shell，能找到）
+A bottom-drawer terminal — open it from a project card's terminal icon or the floating button at the bottom-right.
 
-**文件树 + 预览**（左侧）
-- 树根为当前标签所在项目目录，切换标签自动跟随；点文件夹懒加载展开
-- **单击文件** → 右侧预览；**双击文件** → 把路径插入当前终端
-- **拖动**树里的文件/文件夹到终端 → 插入路径（跟 AI 对话指定目录很方便）
-- 拖动中间分隔条调整树宽；点工具栏文件夹图标可收起/展开文件树
+**Launch an AI CLI**
+- Click the terminal icon on a project card → a menu pops up: **Open Claude / Open Codex / Open opencode**
+- A new tab is created, `cd`s into the project directory and runs the command; the tab shows a tool badge (claude orange / codex blue / opencode green)
+- The **+** at the top-left opens a blank terminal (no CLI)
+- Prerequisite: `codex` / `opencode` must be installed and on your PATH (the terminal uses a login shell, so it will find them)
 
-**预览支持的格式**
-- **代码 / 配置 / 文本**：语法高亮（几十种语言）
-- **图片**：png / jpg / gif / webp / svg / ico / avif（棋盘格透明底）
-- **PDF**：内嵌渲染
-- **Markdown**：渲染成排版页面，预览栏「源码 / 渲染」按钮可切换（已做 XSS 净化，任意来源都可安全预览）
-- **CSV / TSV**：渲染成表格，可切回源码
+**File tree + preview** (left)
+- The tree is rooted at the active tab's project directory and follows tab switches; folders load lazily on click
+- **Single-click a file** → preview on the right; **double-click** → insert its path into the terminal
+- **Drag** a file/folder from the tree onto the terminal → inserts its path (handy for pointing an AI session at a directory)
+- Drag the middle splitter to resize the tree; the folder toolbar icon collapses/expands it
 
-**右键菜单**（树里任意文件/文件夹）
-- **打开文件夹**（文件夹 → 在系统文件管理器打开；文件 → 打开所在文件夹）
-- **插入路径到终端** / **复制路径**
-- **移到废纸篓**（进系统回收站，可恢复；删除前有确认）
+**Supported preview formats**
+- **Code / config / text**: syntax highlighting (dozens of languages)
+- **Images**: png / jpg / gif / webp / svg / ico / avif (checkerboard transparency background)
+- **PDF**: inline rendering
+- **Markdown**: rendered as a formatted page, with a Source / Rendered toggle (XSS-sanitized, safe to preview from any source)
+- **CSV / TSV**: rendered as a table, switchable back to source
 
-**配色主题**
-- 点工具栏调色板图标切换：**默认深色** / **Homebrew**（黑底绿字），选择会被记住
+**Right-click menu** (any file/folder in the tree)
+- **Open folder** (folder → open in system file manager; file → open its containing folder)
+- **Insert path into terminal** / **Copy path**
+- **Move to Trash** (recoverable; asks for confirmation first)
 
-**字号调整**
-- `⌘/Ctrl +` 放大、`⌘/Ctrl -` 缩小、`⌘/Ctrl 0` 复位，或 `⌘/Ctrl + 滚轮`
+**Color themes**
+- Toggle via the palette toolbar icon: **Default Dark** / **Homebrew** (black background, green text); your choice is remembered
 
-**拖拽插路径**
-- 从 Finder / 资源管理器拖文件或文件夹到终端面板 → 自动把路径（含空格会加引号）写入当前终端
+**Font size**
+- `⌘/Ctrl +` to enlarge, `⌘/Ctrl -` to shrink, `⌘/Ctrl 0` to reset, or `⌘/Ctrl + wheel`
 
-## 截图
+**Drag to insert path**
+- Drag a file/folder from Finder / File Explorer onto the terminal panel → its path (quoted if it contains spaces) is written into the active terminal
 
-> 深色主题 UI，Ant Design 风格；终端支持默认深色 / Homebrew 配色切换
-
-## 开发环境要求
+## Requirements
 
 - Node.js 18+
 - pnpm
 - Rust 1.70+
 
-## 安装依赖
+## Install dependencies
 
 ```bash
 pnpm install
 ```
 
-## 开发运行
+## Run in development
 
 ```bash
 pnpm tauri dev
 ```
 
-## 构建打包
+## Build
 
 ```bash
 pnpm tauri build
 ```
 
-## 技术栈
+## Tech stack
 
-- **前端**: HTML/CSS/JavaScript (Vanilla)
-- **后端**: Rust + Tauri v2
-- **数据存储**: JSON 文件
-- **Excel 导出**: rust_xlsxwriter
-- **内置终端**: portable-pty (真实 PTY，跨平台；Windows 走 ConPTY/PowerShell) + xterm.js (vendor)
-- **文件高亮**: highlight.js (vendor，atom-one-dark 主题，无 CDN 依赖)
+- **Frontend**: HTML/CSS/JavaScript (Vanilla)
+- **Backend**: Rust + Tauri v2
+- **Storage**: JSON files
+- **Excel export**: rust_xlsxwriter
+- **Built-in terminal**: portable-pty (real PTY, cross-platform; ConPTY/PowerShell on Windows) + xterm.js (vendored)
+- **File preview**: highlight.js (highlighting) / marked (Markdown) / DOMPurify (sanitizing), all vendored, no CDN dependency
 
-## 数据存储位置
+## Data location
 
 - macOS: `~/Library/Application Support/vibe-coding-manage/`
-  - `projects.json` — 项目数据
-  - `servers.json` — 服务器配置
+  - `projects.json` — project data
+  - `servers.json` — server config
 - Windows: `%APPDATA%/vibe-coding-manage/`
 - Linux: `~/.local/share/vibe-coding-manage/`
 
-## 下载
+## Download
 
-前往 [Releases](https://github.com/luckylee6666/vibe-coding-manage/releases) 下载对应平台版本：
+Grab the build for your platform from [Releases](https://github.com/luckylee6666/vibe-coding-manage/releases):
 
-| 平台 | 文件 |
+| Platform | File |
 | --- | --- |
 | macOS (Apple Silicon) | `VibeCodingManager_x.y.z_aarch64.dmg` |
-| Windows x64 | `..._x64-setup.exe`（安装版）或 `..._x64_en-US.msi` |
-| Windows ARM64 | `..._arm64-setup.exe`（安装版）或 `..._arm64_en-US.msi`（Surface / 骁龙等 ARM 设备）|
+| Windows x64 | `..._x64-setup.exe` (installer) or `..._x64_en-US.msi` |
+| Windows ARM64 | `..._arm64-setup.exe` (installer) or `..._arm64_en-US.msi` (Surface / Snapdragon ARM devices) |
 
-### macOS 安装说明
+### macOS install
 
-由于应用未签名，首次打开会被 macOS 拦截，请按以下步骤授权：
+The app is unsigned, so the first launch is blocked by macOS:
 
-1. 双击 `.dmg` 文件，将 `Vibe Coding Manager.app` 拖入 Applications
-2. 首次打开时会提示"已取消"或"移到废纸篓"
-3. 打开 **系统设置 → 隐私与安全性**，滚动到底部
-4. 在"安全性"区域会看到 `"Vibe Coding Manager"已被阻止打开，因为它来自未验证的开发者`
-5. 点击 **仍要打开**，输入密码确认即可
+1. Open the `.dmg` and drag `Vibe Coding Manager.app` into Applications
+2. The first launch shows "cancelled" / "move to Trash"
+3. Open **System Settings → Privacy & Security** and scroll to the bottom
+4. Under "Security" you'll see `"Vibe Coding Manager" was blocked because it is from an unidentified developer`
+5. Click **Open Anyway**, confirm with your password
 
-### Windows 安装说明
+### Windows install
 
-应用未签名，首次运行会弹出 SmartScreen 提示：
+Unsigned, so SmartScreen will warn on first run:
 
-1. 下载对应架构的 `*-setup.exe` 双击安装
-2. 若弹出 **"Windows 已保护你的电脑"**，点 **更多信息 → 仍要运行**
-3. 按 x64 / ARM64 选择对应自己 CPU 架构的安装包
+1. Download the `*-setup.exe` for your architecture and double-click to install
+2. If **"Windows protected your PC"** appears, click **More info → Run anyway**
+3. Pick x64 or ARM64 to match your CPU architecture
