@@ -382,7 +382,10 @@ function bind() {
       const ctx = treeCtx;
       closeTreeCtx();
       if (!ctx) return;
-      if (action === 'insert') {
+      if (action === 'open') {
+        const target = ctx.entry.isDir ? ctx.entry.path : parentDir(ctx.entry.path);
+        invoke('open_folder', { path: target }).catch(e => msg('打开失败: ' + e, 'error'));
+      } else if (action === 'insert') {
         insertPathToTerminal(ctx.entry.path);
       } else if (action === 'copy') {
         navigator.clipboard?.writeText(ctx.entry.path).then(
@@ -1231,9 +1234,16 @@ function setupTreeDrag() {
 
 // ===== 文件树右键菜单：插入路径 / 复制路径 / 移到废纸篓 =====
 let treeCtx = null;
+function parentDir(p) {
+  const norm = p.replace(/[/\\]+$/, '');
+  const idx = Math.max(norm.lastIndexOf('/'), norm.lastIndexOf('\\'));
+  return idx > 0 ? norm.slice(0, idx) : norm;
+}
+
 function openTreeCtx(entry, row, e) {
   e.preventDefault();
   treeCtx = { entry, row };
+  $('ctx-open-label').textContent = entry.isDir ? '打开文件夹' : '打开所在文件夹';
   const menu = el.treeCtxMenu;
   menu.classList.add('active');
   menu.style.left = Math.min(e.clientX, window.innerWidth - menu.offsetWidth - 8) + 'px';
