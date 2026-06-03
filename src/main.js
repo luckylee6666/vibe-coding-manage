@@ -76,6 +76,7 @@ const el = {
   scanCancelBtn: $('scan-cancel-btn'),
   scanImportBtn: $('scan-import-btn'),
   launchMenu: $('launch-menu'),
+  treeCtxMenu: $('tree-context-menu'),
 };
 
 async function init() {
@@ -373,6 +374,39 @@ function bind() {
   termEl.previewInsert.onclick = () => insertPathToTerminal(termEl.previewInsert.dataset.path || '');
   termEl.previewClose.onclick = closePreview;
   setupTreeSplitter();
+  setupTreeDrag();
+  // 文件树右键菜单
+  el.treeCtxMenu.querySelectorAll('.ctx-item').forEach(item => {
+    item.onclick = () => {
+      const action = item.dataset.action;
+      const ctx = treeCtx;
+      closeTreeCtx();
+      if (!ctx) return;
+      if (action === 'insert') {
+        insertPathToTerminal(ctx.entry.path);
+      } else if (action === 'copy') {
+        navigator.clipboard?.writeText(ctx.entry.path).then(
+          () => msg('路径已复制', 'success'),
+          () => msg('复制失败', 'error'),
+        );
+      } else if (action === 'trash') {
+        askConfirm(ctx.entry.isDir ? '文件夹' : '文件', ctx.entry.name, async () => {
+          try {
+            await invoke('trash_path', { path: ctx.entry.path });
+            if (ctx.row === treeActiveRow) closePreview();
+            const next = ctx.row.nextElementSibling;
+            if (next && next.classList.contains('tree-children')) next.remove();
+            ctx.row.remove();
+            msg('已移到废纸篓', 'success');
+          } catch (e) {
+            msg('删除失败: ' + e, 'error');
+          }
+        });
+      }
+    };
+  });
+  document.addEventListener('click', (e) => { if (!e.target.closest('#tree-context-menu')) closeTreeCtx(); });
+  document.addEventListener('scroll', closeTreeCtx, true);
   const savedTreeW = parseInt(localStorage.getItem('term-tree-width'), 10);
   if (savedTreeW >= 140 && savedTreeW <= 480) termEl.tree.style.width = savedTreeW + 'px';
   const treeHidden = localStorage.getItem('term-tree-hidden') === '1';
@@ -1005,10 +1039,15 @@ function makeTreeRow(entry, depth) {
   const icon = entry.isDir ? TREE_ICONS.folder : TREE_ICONS[fileIconKey(entry.name)];
   row.innerHTML = chevron + icon + `<span class="tree-name">${esc(entry.name)}</span>`;
 
+  // 拖入终端 + 右键菜单（文件/文件夹通用）
+  row.addEventListener('mousedown', (e) => startTreeDragWatch(entry, e));
+  row.addEventListener('contextmenu', (e) => openTreeCtx(entry, row, e));
+
   if (!entry.isDir) {
     let clickTimer = null;
     // 单击=预览，双击=插入路径。延时去抖：双击时取消单击的预览
     row.onclick = () => {
+      if (treeDragSuppressClick) { treeDragSuppressClick = false; return; }
       if (clickTimer) return;
       clickTimer = setTimeout(() => {
         clickTimer = null;
@@ -1030,6 +1069,7 @@ function makeTreeRow(entry, depth) {
   childWrap.style.display = 'none';
   let loaded = false;
   row.onclick = async () => {
+    if (treeDragSuppressClick) { treeDragSuppressClick = false; return; }
     const expanded = row.classList.toggle('expanded');
     childWrap.style.display = expanded ? '' : 'none';
     if (expanded && !loaded) {
@@ -1138,6 +1178,70 @@ function setupTreeSplitter() {
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
   });
+}
+
+// ===== 树项拖入终端（自实现鼠标拖拽，绕开 Tauri 原生 drag-drop 对 HTML5 DnD 的干扰）=====
+let treeDrag = null;
+let treeDragSuppressClick = false;
+
+function isOverTerminalArea(x, y) {
+  if (!termEl.dock.classList.contains('active')) return false;
+  const r = termEl.bodies.getBoundingClientRect();
+  return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+}
+
+function startTreeDragWatch(entry, e) {
+  if (e.button !== 0) return; // 仅左键
+  treeDragSuppressClick = false;
+  treeDrag = { entry, x: e.clientX, y: e.clientY, started: false, ghost: null };
+}
+
+function setupTreeDrag() {
+  document.addEventListener('mousemove', (e) => {
+    if (!treeDrag) return;
+    if (!treeDrag.started) {
+      if (Math.hypot(e.clientX - treeDrag.x, e.clientY - treeDrag.y) < 5) return; // 阈值，区分点击
+      treeDrag.started = true;
+      const g = document.createElement('div');
+      g.className = 'tree-drag-ghost';
+      g.textContent = treeDrag.entry.name;
+      document.body.appendChild(g);
+      treeDrag.ghost = g;
+      document.body.style.userSelect = 'none';
+    }
+    treeDrag.ghost.style.left = (e.clientX + 12) + 'px';
+    treeDrag.ghost.style.top = (e.clientY + 14) + 'px';
+    termEl.dock.classList.toggle('drag-target', isOverTerminalArea(e.clientX, e.clientY));
+  });
+  document.addEventListener('mouseup', (e) => {
+    if (!treeDrag) return;
+    const d = treeDrag;
+    treeDrag = null;
+    if (d.ghost) d.ghost.remove();
+    document.body.style.userSelect = '';
+    termEl.dock.classList.remove('drag-target');
+    if (d.started) {
+      treeDragSuppressClick = true; // 抑制随后的 click（预览/展开）
+      if (isOverTerminalArea(e.clientX, e.clientY) && activeSession) {
+        insertPathToTerminal(d.entry.path);
+      }
+    }
+  });
+}
+
+// ===== 文件树右键菜单：插入路径 / 复制路径 / 移到废纸篓 =====
+let treeCtx = null;
+function openTreeCtx(entry, row, e) {
+  e.preventDefault();
+  treeCtx = { entry, row };
+  const menu = el.treeCtxMenu;
+  menu.classList.add('active');
+  menu.style.left = Math.min(e.clientX, window.innerWidth - menu.offsetWidth - 8) + 'px';
+  menu.style.top = Math.min(e.clientY, window.innerHeight - menu.offsetHeight - 8) + 'px';
+}
+function closeTreeCtx() {
+  el.treeCtxMenu.classList.remove('active');
+  treeCtx = null;
 }
 
 function openDock() {

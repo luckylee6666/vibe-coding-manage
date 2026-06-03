@@ -344,6 +344,23 @@
       </div>
     </div>
 
+    <!-- 文件树右键菜单 -->
+    <div class="tree-ctx-menu" id="tree-context-menu">
+      <div class="ctx-item" data-action="insert">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 9l5 5 5-5M12 14V3"/></svg>
+        <span>插入路径到终端</span>
+      </div>
+      <div class="ctx-item" data-action="copy">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
+        <span>复制路径</span>
+      </div>
+      <div class="ctx-sep"></div>
+      <div class="ctx-item ctx-danger" data-action="trash">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M14.74 9l-.35 9m-4.78 0L9.26 9M5 6h14m-2 0l-.7 13.2a2 2 0 01-2 1.8H8.7a2 2 0 01-2-1.8L6 6m3 0V4a1 1 0 011-1h4a1 1 0 011 1v2"/></svg>
+        <span>移到废纸篓</span>
+      </div>
+    </div>
+
     <!-- 浮动开关：收起时显示，带会话数角标 -->
     <button class="terminal-fab" id="terminal-fab" title="终端">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6.75 7.5l3 2.25-3 2.25m4.5 0h3M3.375 3h17.25c.621 0 1.125.504 1.125 1.125v15.75c0 .621-.504 1.125-1.125 1.125H3.375c-.621 0-1.125-.504-1.125-1.125V4.125C2.25 3.504 2.754 3 3.375 3z"/></svg>

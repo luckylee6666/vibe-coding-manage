@@ -1155,6 +1155,77 @@ body {
   color: var(--blue);
 }
 
+/* 文件树拖拽到终端时跟随光标的标签 */
+.tree-drag-ghost {
+  position: fixed;
+  z-index: 3000;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: #fff;
+  background: rgba(22, 119, 255, 0.94);
+  border-radius: 6px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+  white-space: nowrap;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 文件树右键菜单（深色，叠在终端面板上） */
+.tree-ctx-menu {
+  position: fixed;
+  z-index: 1700;
+  min-width: 160px;
+  padding: 4px;
+  background: #232936;
+  border: 1px solid #2b313d;
+  border-radius: 8px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+  display: none;
+}
+
+.tree-ctx-menu.active {
+  display: block;
+}
+
+.ctx-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #aeb6c4;
+  cursor: pointer;
+}
+
+.ctx-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #e6eaf2;
+}
+
+.ctx-item svg {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+}
+
+.ctx-item.ctx-danger {
+  color: #ff7875;
+}
+
+.ctx-item.ctx-danger:hover {
+  background: rgba(255, 77, 79, 0.14);
+  color: #ff4d4f;
+}
+
+.ctx-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: #2b313d;
+}
+
 /* ========== 内置终端 底部抽屉 ========== */
 .terminal-dock {
   position: fixed;

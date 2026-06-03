@@ -566,6 +566,16 @@ fn read_file(path: String) -> Result<FileContent, String> {
     })
 }
 
+/// 把文件/文件夹移到系统废纸篓（可恢复，不永久删除）。
+#[tauri::command]
+fn trash_path(path: String) -> Result<(), String> {
+    let p = std::path::Path::new(&path);
+    if !p.exists() {
+        return Err("路径不存在".to_string());
+    }
+    trash::delete(p).map_err(|e| e.to_string())
+}
+
 // ========== 内置终端（PTY）==========
 
 /// 一个活跃的伪终端会话：保留 master（用于 resize）、writer（写入键入）、child（用于 kill）
@@ -739,6 +749,7 @@ pub fn run() {
             open_pick_directory,
             list_dir,
             read_file,
+            trash_path,
             terminal_create,
             terminal_write,
             terminal_resize,
