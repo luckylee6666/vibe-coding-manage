@@ -854,6 +854,9 @@ const termEl = {
   preview: $('file-preview'),
   previewName: $('file-preview-name'),
   previewCode: $('file-preview-code'),
+  previewPre: $('file-preview-pre'),
+  previewImage: $('file-preview-image'),
+  previewImg: $('file-preview-img'),
   previewBody: $('file-preview-body'),
   previewInsert: $('file-preview-insert'),
   previewClose: $('file-preview-close'),
@@ -1005,6 +1008,7 @@ const TREE_ICONS = {
   code: '<svg class="tree-icon" viewBox="0 0 24 24" fill="none" stroke="#98c379" stroke-width="1.9"><path d="M8 9l-3 3 3 3M16 9l3 3-3 3M13 7l-2 10"/></svg>',
   config: '<svg class="tree-icon" viewBox="0 0 24 24" fill="none" stroke="#e5c07b" stroke-width="1.8"><path d="M4 7h8M17 7h3M4 17h3M12 17h8"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg>',
   doc: '<svg class="tree-icon" viewBox="0 0 24 24" fill="none" stroke="#61afef" stroke-width="1.7"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4M9 13h6M9 16h6"/></svg>',
+  image: '<svg class="tree-icon" viewBox="0 0 24 24" fill="none" stroke="#c678dd" stroke-width="1.7"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M5 19l5-5 4 4 2-2 3 3"/></svg>',
   file: '<svg class="tree-icon" viewBox="0 0 24 24" fill="none" stroke="#8b94a4" stroke-width="1.7"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/></svg>',
 };
 
@@ -1031,6 +1035,7 @@ function fileIconKey(name) {
   if (/^(js|mjs|cjs|ts|tsx|jsx|vue|go|rs|py|rb|java|kt|c|h|hpp|cpp|cc|cs|php|swift|sh|bash|zsh|lua|sql|html|css|scss)$/.test(ext)) return 'code';
   if (/^(json|ya?ml|toml|ini|env|conf|cfg|lock|xml|gradle|properties)$/.test(ext)) return 'config';
   if (/^(md|markdown|txt|rst|adoc|log)$/.test(ext)) return 'doc';
+  if (/^(png|jpe?g|gif|webp|bmp|ico|svg|avif)$/.test(ext)) return 'image';
   return 'file';
 }
 
@@ -1120,12 +1125,40 @@ function insertPathToTerminal(path) {
   sessions.get(activeSession)?.term.focus();
 }
 
+function isImageFile(name) {
+  return /\.(png|jpe?g|gif|webp|bmp|ico|svg|avif)$/i.test(name);
+}
+
 async function openPreview(path, name) {
   termEl.preview.querySelector('.file-preview-truncated')?.remove();
   termEl.previewName.textContent = name;
   termEl.previewName.title = path;
   termEl.previewInsert.dataset.path = path;
   termEl.preview.classList.add('active');
+
+  if (isImageFile(name)) {
+    // 图片预览：隐藏文本、显示 <img>
+    termEl.previewPre.style.display = 'none';
+    termEl.previewImage.classList.add('active');
+    termEl.previewImg.removeAttribute('src');
+    termEl.previewImg.alt = '加载中…';
+    try {
+      termEl.previewImg.src = await invoke('read_image', { path });
+      termEl.previewImg.alt = name;
+    } catch (e) {
+      termEl.previewImage.classList.remove('active');
+      termEl.previewPre.style.display = '';
+      termEl.previewCode.className = 'hljs';
+      termEl.previewCode.removeAttribute('data-highlighted');
+      termEl.previewCode.textContent = String(e);
+    }
+    return;
+  }
+
+  // 文本预览
+  termEl.previewImage.classList.remove('active');
+  termEl.previewImg.removeAttribute('src');
+  termEl.previewPre.style.display = '';
   termEl.previewCode.className = 'hljs';
   termEl.previewCode.removeAttribute('data-highlighted');
   termEl.previewCode.textContent = '加载中…';

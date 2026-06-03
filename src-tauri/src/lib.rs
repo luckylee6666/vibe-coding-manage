@@ -566,6 +566,39 @@ fn read_file(path: String) -> Result<FileContent, String> {
     })
 }
 
+/// 读取图片文件 → base64 data URL（供 <img> 直接显示）。>16MB 拒绝。
+#[tauri::command]
+fn read_image(path: String) -> Result<String, String> {
+    let p = std::path::Path::new(&path);
+    if !p.is_file() {
+        return Err("不是文件".to_string());
+    }
+    const MAX: u64 = 16 * 1024 * 1024;
+    let size = fs::metadata(p).map_err(|e| e.to_string())?.len();
+    if size > MAX {
+        return Err("图片过大（>16MB）".to_string());
+    }
+    let ext = p
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    let mime = match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        "ico" => "image/x-icon",
+        "svg" => "image/svg+xml",
+        "avif" => "image/avif",
+        _ => "application/octet-stream",
+    };
+    let bytes = fs::read(p).map_err(|e| e.to_string())?;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    Ok(format!("data:{};base64,{}", mime, b64))
+}
+
 /// 把文件/文件夹移到系统废纸篓（可恢复，不永久删除）。
 #[tauri::command]
 fn trash_path(path: String) -> Result<(), String> {
@@ -749,6 +782,7 @@ pub fn run() {
             open_pick_directory,
             list_dir,
             read_file,
+            read_image,
             trash_path,
             terminal_create,
             terminal_write,

@@ -1731,6 +1731,35 @@ body {
   padding: 10px 14px;
 }
 
+/* 图片预览：居中 + 棋盘格透明底 */
+.file-preview-image {
+  display: none;
+  min-height: 100%;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background-color: #14171e;
+  background-image:
+    linear-gradient(45deg, #20242e 25%, transparent 25%),
+    linear-gradient(-45deg, #20242e 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #20242e 75%),
+    linear-gradient(-45deg, transparent 75%, #20242e 75%);
+  background-size: 20px 20px;
+  background-position: 0 0, 0 10px, 10px -10px, -10px 0;
+}
+
+.file-preview-image.active {
+  display: flex;
+}
+
+.file-preview-image img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.4);
+  border-radius: 4px;
+}
+
 .file-preview-body code {
   font-family: "JetBrains Mono", Menlo, Monaco, "Courier New", monospace;
   font-size: 12.5px;
