@@ -18,7 +18,6 @@ const $ = id => document.getElementById(id);
 const el = {
   list: $('project-list'),
   empty: $('empty-state'),
-  count: $('project-count'),
   countAll: $('count-all'),
   search: $('search-input'),
   addBtn: $('add-btn'),
@@ -90,7 +89,6 @@ async function load() {
     servers = await invoke('get_servers');
     renderGroups();
     render(projects);
-    el.count.textContent = projects.length;
     el.countAll.textContent = projects.length;
   } catch (e) {
     console.error('加载失败:', e);

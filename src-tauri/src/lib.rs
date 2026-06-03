@@ -6,7 +6,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::Mutex;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -781,6 +781,16 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(state)
         .manage(TerminalState::default())
+        .setup(|app| {
+            // 版本号显示在原生标题栏（来自 Cargo.toml，单一来源）
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.set_title(&format!(
+                    "Vibe Coding Manager v{}",
+                    env!("CARGO_PKG_VERSION")
+                ));
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             get_projects,
             add_project,

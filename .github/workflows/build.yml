@@ -53,33 +53,16 @@ jobs:
         run: pnpm install
 
       - name: Build
+        # Tauri 自带的 DMG 带「拖到 Applications」布局；signingIdentity:"-" 已在构建时 ad-hoc 签名
         run: pnpm tauri build --target aarch64-apple-darwin
         env:
           TAURI_SIGNING_PRIVATE_KEY: ""
-
-      - name: Ad-hoc sign
-        run: |
-          APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Vibe Coding Manager.app"
-          codesign --force --deep --sign - "$APP"
-          echo "Signed. Verifying..."
-          codesign -vvv "$APP" 2>&1 || true
-
-      - name: Get version
-        id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-
-      - name: Create DMG
-        run: |
-          hdiutil create -volname "Vibe Coding Manager" \
-            -srcfolder "src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Vibe Coding Manager.app" \
-            -ov -format UDZO \
-            "VibeCodingManager_${{ steps.version.outputs.VERSION }}_aarch64.dmg"
 
       - name: Upload macOS artifact
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          files: VibeCodingManager_${{ steps.version.outputs.VERSION }}_aarch64.dmg
+          files: src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
 
   build-windows-x64:
     needs: create-release
