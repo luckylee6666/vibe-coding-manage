@@ -372,7 +372,16 @@ function bind() {
   termEl.treeBtn.onclick = toggleTree;
   termEl.treeRefreshBtn.onclick = () => renderTree(treeRoot);
   termEl.previewInsert.onclick = () => insertPathToTerminal(termEl.previewInsert.dataset.path || '');
+  termEl.previewToggle.onclick = togglePreviewMode;
   termEl.previewClose.onclick = closePreview;
+  // 渲染视图里的链接走系统浏览器，别让主 webview 导航走
+  termEl.previewRich.addEventListener('click', (e) => {
+    const a = e.target.closest('a[href]');
+    if (!a) return;
+    e.preventDefault();
+    const href = a.getAttribute('href') || '';
+    if (/^https?:\/\//i.test(href)) invoke('open_folder', { path: href }).catch(() => {});
+  });
   setupTreeSplitter();
   setupTreeDrag();
   // 文件树右键菜单
@@ -857,6 +866,9 @@ const termEl = {
   previewPre: $('file-preview-pre'),
   previewImage: $('file-preview-image'),
   previewImg: $('file-preview-img'),
+  previewRich: $('file-preview-rich'),
+  previewPdf: $('file-preview-pdf'),
+  previewToggle: $('file-preview-toggle'),
   previewBody: $('file-preview-body'),
   previewInsert: $('file-preview-insert'),
   previewClose: $('file-preview-close'),
@@ -1034,7 +1046,7 @@ function fileIconKey(name) {
   const ext = (name.split('.').pop() || '').toLowerCase();
   if (/^(js|mjs|cjs|ts|tsx|jsx|vue|go|rs|py|rb|java|kt|c|h|hpp|cpp|cc|cs|php|swift|sh|bash|zsh|lua|sql|html|css|scss)$/.test(ext)) return 'code';
   if (/^(json|ya?ml|toml|ini|env|conf|cfg|lock|xml|gradle|properties)$/.test(ext)) return 'config';
-  if (/^(md|markdown|txt|rst|adoc|log)$/.test(ext)) return 'doc';
+  if (/^(md|markdown|txt|rst|adoc|log|pdf|csv|tsv)$/.test(ext)) return 'doc';
   if (/^(png|jpe?g|gif|webp|bmp|ico|svg|avif)$/.test(ext)) return 'image';
   return 'file';
 }
@@ -1125,8 +1137,89 @@ function insertPathToTerminal(path) {
   sessions.get(activeSession)?.term.focus();
 }
 
-function isImageFile(name) {
-  return /\.(png|jpe?g|gif|webp|bmp|ico|svg|avif)$/i.test(name);
+function isImageFile(name) { return /\.(png|jpe?g|gif|webp|bmp|ico|svg|avif)$/i.test(name); }
+function isPdfFile(name) { return /\.pdf$/i.test(name); }
+function isMarkdownFile(name) { return /\.(md|markdown)$/i.test(name); }
+function isCsvFile(name) { return /\.(csv|tsv)$/i.test(name); }
+
+let previewPdfUrl = null;            // 当前 PDF 的 object URL（需手动 revoke）
+let previewRichState = null;         // { kind:'md'|'csv', content, name } 供源码/渲染切换
+
+// 在四个视图(pre/image/rich/pdf)间切换显示
+function showPreviewView(which) {
+  termEl.previewPre.style.display = which === 'text' ? '' : 'none';
+  termEl.previewImage.classList.toggle('active', which === 'image');
+  termEl.previewRich.classList.toggle('active', which === 'rich');
+  termEl.previewPdf.classList.toggle('active', which === 'pdf');
+}
+
+function revokePreviewPdf() {
+  if (previewPdfUrl) { URL.revokeObjectURL(previewPdfUrl); previewPdfUrl = null; }
+  termEl.previewPdf.removeAttribute('src');
+}
+
+function renderTextPreview(content, name, truncatedNote) {
+  showPreviewView('text');
+  termEl.previewCode.className = 'hljs';
+  termEl.previewCode.removeAttribute('data-highlighted');
+  termEl.previewCode.textContent = content;
+  const lang = hljsLangFor(name);
+  termEl.previewCode.className = lang ? `hljs language-${lang}` : 'hljs';
+  try { window.hljs.highlightElement(termEl.previewCode); } catch (e) {}
+  if (truncatedNote) {
+    const note = document.createElement('div');
+    note.className = 'file-preview-truncated';
+    note.textContent = truncatedNote;
+    termEl.preview.appendChild(note);
+  }
+}
+
+// CSV/TSV 解析（处理引号包裹的字段）
+function parseCSV(text, delim) {
+  const rows = [];
+  let row = [], field = '', inQ = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQ) {
+      if (c === '"') { if (text[i + 1] === '"') { field += '"'; i++; } else inQ = false; }
+      else field += c;
+    } else if (c === '"') inQ = true;
+    else if (c === delim) { row.push(field); field = ''; }
+    else if (c === '\n') { row.push(field); rows.push(row); row = []; field = ''; }
+    else if (c !== '\r') field += c;
+  }
+  if (field.length || row.length) { row.push(field); rows.push(row); }
+  return rows;
+}
+
+function renderCsvRich(content, name) {
+  const rows = parseCSV(content, /\.tsv$/i.test(name) ? '\t' : ',');
+  const MAXROW = 1000;
+  const shown = rows.slice(0, MAXROW);
+  let html = '<table class="csv-table">';
+  shown.forEach((r, i) => {
+    const tag = i === 0 ? 'th' : 'td';
+    html += '<tr>' + r.map(c => `<${tag}>${esc(c)}</${tag}>`).join('') + '</tr>';
+  });
+  html += '</table>';
+  if (rows.length > MAXROW) html += `<div class="csv-note">仅显示前 ${MAXROW} 行(共 ${rows.length} 行)</div>`;
+  termEl.previewRich.innerHTML = html;
+  showPreviewView('rich');
+}
+
+function renderRich() {
+  if (!previewRichState) return;
+  const { kind, content, name } = previewRichState;
+  if (kind === 'md') {
+    termEl.previewRich.className = 'file-preview-rich markdown-body';
+    // marked 默认透传原始 HTML 且不净化 → 必须 DOMPurify 过滤，防止恶意 .md 在应用内执行脚本
+    const raw = window.marked ? window.marked.parse(content) : esc(content);
+    termEl.previewRich.innerHTML = window.DOMPurify ? window.DOMPurify.sanitize(raw) : esc(content);
+    showPreviewView('rich');
+  } else {
+    termEl.previewRich.className = 'file-preview-rich';
+    renderCsvRich(content, name);
+  }
 }
 
 async function openPreview(path, name) {
@@ -1135,54 +1228,70 @@ async function openPreview(path, name) {
   termEl.previewName.title = path;
   termEl.previewInsert.dataset.path = path;
   termEl.preview.classList.add('active');
+  revokePreviewPdf();
+  previewRichState = null;
+  termEl.previewToggle.style.display = 'none';
+  termEl.previewToggle.classList.remove('active');
 
+  // 图片
   if (isImageFile(name)) {
-    // 图片预览：隐藏文本、显示 <img>
-    termEl.previewPre.style.display = 'none';
-    termEl.previewImage.classList.add('active');
+    showPreviewView('image');
     termEl.previewImg.removeAttribute('src');
     termEl.previewImg.alt = '加载中…';
     try {
       termEl.previewImg.src = await invoke('read_image', { path });
       termEl.previewImg.alt = name;
-    } catch (e) {
-      termEl.previewImage.classList.remove('active');
-      termEl.previewPre.style.display = '';
-      termEl.previewCode.className = 'hljs';
-      termEl.previewCode.removeAttribute('data-highlighted');
-      termEl.previewCode.textContent = String(e);
-    }
+    } catch (e) { renderTextPreview(String(e), name); }
     return;
   }
 
-  // 文本预览
-  termEl.previewImage.classList.remove('active');
-  termEl.previewImg.removeAttribute('src');
-  termEl.previewPre.style.display = '';
-  termEl.previewCode.className = 'hljs';
-  termEl.previewCode.removeAttribute('data-highlighted');
-  termEl.previewCode.textContent = '加载中…';
+  // PDF
+  if (isPdfFile(name)) {
+    showPreviewView('pdf');
+    try {
+      const b64 = await invoke('read_binary_base64', { path });
+      const blob = new Blob([b64ToBytes(b64)], { type: 'application/pdf' });
+      previewPdfUrl = URL.createObjectURL(blob);
+      termEl.previewPdf.src = previewPdfUrl;
+    } catch (e) { renderTextPreview(String(e), name); }
+    return;
+  }
+
+  // Markdown / CSV：默认渲染，提供源码/渲染切换
+  if (isMarkdownFile(name) || isCsvFile(name)) {
+    try {
+      const res = await invoke('read_file', { path });
+      previewRichState = { kind: isMarkdownFile(name) ? 'md' : 'csv', content: res.content, name };
+      termEl.previewToggle.style.display = '';
+      termEl.previewToggle.classList.add('active'); // active=渲染态
+      renderRich();
+      return;
+    } catch (e) { renderTextPreview(String(e), name); return; }
+  }
+
+  // 普通文本
   try {
     const res = await invoke('read_file', { path });
-    termEl.previewCode.removeAttribute('data-highlighted');
-    termEl.previewCode.textContent = res.content;
-    // 先按扩展名定语言（命中则跳过昂贵的全语言自动识别）
-    const lang = hljsLangFor(name);
-    termEl.previewCode.className = lang ? `hljs language-${lang}` : 'hljs';
-    try { window.hljs.highlightElement(termEl.previewCode); } catch (e) {}
-    if (res.truncated) {
-      const note = document.createElement('div');
-      note.className = 'file-preview-truncated';
-      note.textContent = `文件超过 1MB，仅显示前 1MB（共 ${(res.size / 1048576).toFixed(1)} MB）`;
-      termEl.preview.appendChild(note);
-    }
-  } catch (e) {
-    termEl.previewCode.textContent = String(e);
-  }
+    renderTextPreview(
+      res.content, name,
+      res.truncated ? `文件超过 1MB，仅显示前 1MB（共 ${(res.size / 1048576).toFixed(1)} MB）` : null,
+    );
+  } catch (e) { renderTextPreview(String(e), name); }
+}
+
+// 源码 / 渲染切换（仅 md/csv）
+function togglePreviewMode() {
+  if (!previewRichState) return;
+  const toRich = !termEl.previewToggle.classList.contains('active');
+  termEl.previewToggle.classList.toggle('active', toRich);
+  if (toRich) renderRich();
+  else renderTextPreview(previewRichState.content, previewRichState.name, null);
 }
 
 function closePreview() {
   termEl.preview.classList.remove('active');
+  revokePreviewPdf();
+  previewRichState = null;
   if (treeActiveRow) { treeActiveRow.classList.remove('active'); treeActiveRow = null; }
 }
 

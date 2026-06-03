@@ -599,6 +599,22 @@ fn read_image(path: String) -> Result<String, String> {
     Ok(format!("data:{};base64,{}", mime, b64))
 }
 
+/// 读取任意文件 → base64（供前端转 Blob 显示，如 PDF）。>32MB 拒绝。
+#[tauri::command]
+fn read_binary_base64(path: String) -> Result<String, String> {
+    let p = std::path::Path::new(&path);
+    if !p.is_file() {
+        return Err("不是文件".to_string());
+    }
+    const MAX: u64 = 32 * 1024 * 1024;
+    let size = fs::metadata(p).map_err(|e| e.to_string())?.len();
+    if size > MAX {
+        return Err("文件过大（>32MB）".to_string());
+    }
+    let bytes = fs::read(p).map_err(|e| e.to_string())?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
+}
+
 /// 把文件/文件夹移到系统废纸篓（可恢复，不永久删除）。
 #[tauri::command]
 fn trash_path(path: String) -> Result<(), String> {
@@ -783,6 +799,7 @@ pub fn run() {
             list_dir,
             read_file,
             read_image,
+            read_binary_base64,
             trash_path,
             terminal_create,
             terminal_write,

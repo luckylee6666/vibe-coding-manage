@@ -315,6 +315,9 @@
           <div class="file-preview" id="file-preview">
             <div class="file-preview-head">
               <span class="file-preview-name" id="file-preview-name"></span>
+              <button class="term-tool-btn" id="file-preview-toggle" title="源码 / 渲染" style="display:none;">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 9l-3 3 3 3M16 9l3 3-3 3M13 6l-2 12"/></svg>
+              </button>
               <button class="term-tool-btn" id="file-preview-insert" title="把路径插入终端">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 9l5 5 5-5M12 14V3"/></svg>
               </button>
@@ -325,6 +328,8 @@
             <div class="file-preview-body" id="file-preview-body">
               <pre id="file-preview-pre"><code id="file-preview-code" class="hljs"></code></pre>
               <div class="file-preview-image" id="file-preview-image"><img id="file-preview-img" alt="" /></div>
+              <div class="file-preview-rich markdown-body" id="file-preview-rich"></div>
+              <iframe class="file-preview-pdf" id="file-preview-pdf" title="PDF 预览"></iframe>
             </div>
           </div>
         </div>
@@ -378,6 +383,8 @@
     <script src="vendor/xterm.js"></script>
     <script src="vendor/addon-fit.js"></script>
     <script src="vendor/highlight.min.js"></script>
+    <script src="vendor/marked.umd.js"></script>
+    <script src="vendor/purify.min.js"></script>
     <script type="module" src="main.js"></script>
   </body>
 </html>
