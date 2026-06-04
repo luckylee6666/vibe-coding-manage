@@ -2,6 +2,38 @@
 
 All notable changes to this project are documented here. 本项目的更新记录如下。
 
+## v1.2.2
+
+### English
+
+**Added**
+- Rename a group inline: hover a group in the sidebar, click the pencil icon, edit the name, press Enter. All projects in that group are re-assigned in one batch (groups have no standalone entity — they aggregate from each project's `group` field).
+- Close-terminal confirmation: closing a terminal tab now prompts first. If the session was started with an AI CLI (claude/codex/…), it reminds you to let the tool "update its memory" before closing, so context isn't lost.
+
+**Changed**
+- Title bar now shows the app version.
+- Server management moved to the top of the sidebar; the redundant project count was removed.
+- The confirm dialog was generalized (title / message / button text / danger style) and now supports multi-line messages.
+- DMG installer now uses a "drag to Applications" layout.
+
+**Fixed**
+- Confirm dialogs were hidden behind the built-in terminal panel when it was open — their z-index is now raised above it.
+
+### 中文
+
+**新增**
+- 分组就地重命名：在侧栏 hover 分组、点铅笔图标、改名后回车。组内所有项目一次性批量迁移（分组没有独立实体，靠各项目的 `group` 字段聚合）。
+- 关闭终端前确认：关终端标签会先弹确认。若该会话起的是某个 AI CLI（claude/codex/…），会提醒你先让它「更新记忆」再关，避免上下文丢失。
+
+**变更**
+- 标题栏显示应用版本号。
+- 服务器管理移到侧栏顶部；去掉冗余的项目数显示。
+- 确认弹窗抽象为通用组件（标题 / 内容 / 按钮文案 / 危险样式），支持多行内容。
+- DMG 安装界面改为「拖到 Applications」布局。
+
+**修复**
+- 内置终端面板打开时确认弹窗会被压在底下——已把弹窗层级提到终端之上。
+
 ## v1.2.1
 
 ### English

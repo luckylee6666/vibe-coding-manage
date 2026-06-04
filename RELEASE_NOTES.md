@@ -1,19 +1,19 @@
 Cross-platform desktop app: macOS (Apple Silicon) + Windows (x64 / ARM64)
 跨平台桌面版：macOS (Apple Silicon) + Windows (x64 / ARM64)
 
-## What's new in v1.2.1 / 本版更新
+## What's new in v1.2.2 / 本版更新
 
 **English**
-- **File tree → terminal**: drag a file/folder onto the terminal to insert its path.
-- **Right-click menu**: Open folder · Insert path · Copy path · Move to Trash (recoverable).
-- **Richer preview**: images, PDF, rendered Markdown (Source/Rendered toggle), CSV/TSV tables.
-- **Security**: Markdown preview sanitized (DOMPurify); links open in the system browser.
+- **Rename groups inline**: hover a group, click the pencil, type the new name — all projects in that group move together.
+- **Close-terminal confirmation**: closing a terminal tab now asks first, and reminds you to let the AI "update its memory" before the session ends.
+- **Title bar shows the version**; server management moved to the top; redundant project count removed.
+- **Fixes**: confirm dialogs no longer hide behind the open terminal panel; the DMG now has a "drag to Applications" layout.
 
 **中文**
-- **文件树 → 终端**：拖文件/文件夹到终端插入路径。
-- **右键菜单**：打开文件夹 · 插入路径 · 复制路径 · 移到废纸篓（可恢复）。
-- **更丰富的预览**：图片、PDF、Markdown 渲染（源码/渲染切换）、CSV/TSV 表格。
-- **安全**：Markdown 预览经 DOMPurify 净化；链接走系统浏览器。
+- **分组就地重命名**：hover 分组点铅笔即可改名，组内项目一起迁移。
+- **关闭终端前确认**：关终端标签会先弹确认，并提醒你先让 AI「更新记忆」再结束会话。
+- **标题栏显示版本号**；服务器管理移到顶部；去掉冗余的项目数。
+- **修复**：终端面板开着时确认弹窗不再被压在底下；DMG 带「拖到 Applications」布局。
 
 ## Install / 安装
 

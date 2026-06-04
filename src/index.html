@@ -153,7 +153,7 @@
       <div class="modal-wrap">
         <div class="modal modal-sm">
           <div class="modal-header">
-            <span class="modal-title">确认删除</span>
+            <span class="modal-title" id="confirm-title">确认</span>
             <button class="modal-x" id="confirm-close">&times;</button>
           </div>
           <div class="modal-body">
@@ -161,7 +161,7 @@
               <svg class="confirm-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                 <path d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/>
               </svg>
-              <p>确定要删除<span id="confirm-kind">项目</span> <strong id="delete-project-name"></strong> 吗？</p>
+              <p id="confirm-message"></p>
             </div>
           </div>
           <div class="modal-footer">

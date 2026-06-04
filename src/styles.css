@@ -165,6 +165,54 @@ body {
   color: var(--bg-0);
 }
 
+/* 分组名 + 就地重命名 */
+.group-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.group-rename-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  color: var(--text-3);
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.12s, background 0.12s, color 0.12s;
+}
+
+.menu-group-item > .menu-item:hover .group-rename-btn {
+  opacity: 1;
+}
+
+.group-rename-btn:hover {
+  background: var(--bg-3);
+  color: var(--blue);
+}
+
+.group-rename-btn svg {
+  width: 13px;
+  height: 13px;
+}
+
+.group-rename-input {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  font-family: inherit;
+  color: var(--text-1);
+  background: var(--bg-0);
+  border: 1px solid var(--blue);
+  border-radius: 4px;
+  padding: 1px 6px;
+  outline: none;
+}
+
 /* 分组展开/折叠 */
 .menu-group-item .group-arrow {
   width: 12px;
@@ -579,7 +627,8 @@ body {
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.45);
-  z-index: 1000;
+  /* 高于内置终端面板(1500)/其菜单,否则终端开着时弹窗会被压在底下 */
+  z-index: 1800;
   opacity: 0;
   visibility: hidden;
   transition: all 0.2s;
@@ -592,7 +641,7 @@ body {
 
 /* 确认弹窗叠在其他弹窗（如服务器列表）之上 */
 #confirm-overlay {
-  z-index: 1100;
+  z-index: 1900;
 }
 
 .modal-wrap {
@@ -784,6 +833,7 @@ body {
   font-size: 14px;
   color: var(--text-1);
   line-height: 1.6;
+  white-space: pre-line;
 }
 
 /* Message */

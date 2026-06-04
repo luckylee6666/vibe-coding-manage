@@ -1,6 +1,6 @@
 [package]
 name = "vibe-coding-manage"
-version = "1.2.1"
+version = "1.2.2"
 description = "Vibe Coding Project Manager"
 authors = ["you"]
 edition = "2021"

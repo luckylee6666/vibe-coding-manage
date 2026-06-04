@@ -43,7 +43,8 @@ const el = {
   submit: $('submit-btn'),
   confirm: $('confirm-overlay'),
   confirmClose: $('confirm-close'),
-  deleteName: $('delete-project-name'),
+  confirmTitle: $('confirm-title'),
+  confirmMessage: $('confirm-message'),
   confirmCancel: $('confirm-cancel'),
   confirmDelete: $('confirm-delete'),
   toasts: $('toast-container'),
@@ -125,7 +126,8 @@ function renderGroups() {
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
           <path d="M3.75 9.776c.112-.017.227-.026.344-.026h15.812c.117 0 .232.009.344.026m-16.5 0a2.25 2.25 0 00-1.883 2.542l.857 6a2.25 2.25 0 002.227 1.932H19.05a2.25 2.25 0 002.227-1.932l.857-6a2.25 2.25 0 00-1.883-2.542m-16.5 0V6A2.25 2.25 0 016 3.75h3.879a1.5 1.5 0 011.06.44l2.122 2.12a1.5 1.5 0 001.06.44H18A2.25 2.25 0 0120.25 9v.776"/>
         </svg>
-        <span>${esc(name)}</span>
+        <span class="group-name">${esc(name)}</span>
+        ${name !== '未分组' ? `<span class="group-rename-btn" title="重命名分组"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M16.5 4.5l3 3M4 20l1-4L16.5 4.5l3 3L8 19l-4 1z"/></svg></span>` : ''}
         <span class="menu-badge">${count}</span>
       </a>
       <div class="group-children">
@@ -174,6 +176,56 @@ function renderGroups() {
       }
     };
   });
+
+  el.groupList.querySelectorAll('.group-rename-btn').forEach(btn => {
+    btn.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const item = btn.closest('.menu-group-item');
+      startRenameGroup(item, item.dataset.group);
+    };
+  });
+}
+
+// 分组就地重命名：把名字 span 换成输入框，回车提交 / Esc 取消（WKWebView 无原生 prompt）
+function startRenameGroup(groupItemEl, oldName) {
+  const nameSpan = groupItemEl.querySelector(':scope > .menu-item > .group-name');
+  if (!nameSpan) return;
+  const input = document.createElement('input');
+  input.className = 'group-rename-input';
+  input.value = oldName;
+  nameSpan.replaceWith(input);
+  input.focus();
+  input.select();
+
+  let finished = false;
+  const finish = async (save) => {
+    if (finished) return;
+    finished = true;
+    input.removeEventListener('keydown', onKey);
+    input.removeEventListener('blur', onBlur);
+    const newName = input.value.trim();
+    if (save && newName && newName !== oldName) {
+      try {
+        await invoke('rename_group', { old: oldName, new: newName });
+        if (activeGroup === oldName) activeGroup = newName;
+        await load(); // 内部会重渲染分组
+        return;
+      } catch (e) {
+        msg('重命名失败: ' + (e.message || e), 'error');
+      }
+    }
+    renderGroups();
+  };
+  const onKey = (e) => {
+    e.stopPropagation();
+    if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+  };
+  const onBlur = () => finish(true);
+  input.addEventListener('keydown', onKey);
+  input.addEventListener('blur', onBlur);
+  input.addEventListener('click', e => e.stopPropagation());
 }
 
 function filterAndRender() {
@@ -461,11 +513,19 @@ function closeModal() {
 }
 
 // 通用确认弹窗（WKWebView 不支持原生 confirm，统一走应用内弹窗）
-function askConfirm(kind, name, onConfirm) {
-  $('confirm-kind').textContent = kind;
-  el.deleteName.textContent = name;
+function showConfirm({ title = '确认', message, confirmText = '确认', danger = true, onConfirm }) {
+  el.confirmTitle.textContent = title;
+  el.confirmMessage.textContent = message;
+  el.confirmDelete.textContent = confirmText;
+  el.confirmDelete.classList.toggle('btn-danger', danger);
+  el.confirmDelete.classList.toggle('btn-primary', !danger);
   pendingConfirm = onConfirm;
   el.confirm.classList.add('active');
+}
+
+// 删除类确认的便捷封装
+function askConfirm(kind, name, onConfirm) {
+  showConfirm({ title: '确认删除', message: `确定要删除${kind} ${name} 吗？`, confirmText: '删除', danger: true, onConfirm });
 }
 
 function del(id, name) {
@@ -1451,6 +1511,23 @@ function activateSession(id) {
   s.term.focus();
 }
 
+// 关闭终端前确认（提醒先让 AI 更新记忆）
+function confirmCloseSession(id) {
+  const s = sessions.get(id);
+  if (!s) return;
+  const running = s.status !== 'exited';
+  const aiHint = s.tool
+    ? `\n如果刚跟 ${s.tool} 聊过，建议先让它「更新记忆」再关，否则上下文会丢。`
+    : '';
+  showConfirm({
+    title: '关闭终端',
+    message: `确定关闭「${s.name}」吗？${running ? '\n关闭后该会话立即结束。' : ''}${aiHint}`,
+    confirmText: '关闭',
+    danger: true,
+    onConfirm: () => closeSession(id),
+  });
+}
+
 async function closeSession(id) {
   const s = sessions.get(id);
   if (!s) return;
@@ -1491,7 +1568,7 @@ async function createSession({ cwd = '', name = '', autoCmd = '' }) {
     `<span class="term-tab-close" title="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 18L18 6M6 6l12 12"/></svg></span>`;
   termEl.tabs.appendChild(tabEl);
   tabEl.onclick = (ev) => {
-    if (ev.target.closest('.term-tab-close')) { closeSession(id); return; }
+    if (ev.target.closest('.term-tab-close')) { confirmCloseSession(id); return; }
     activateSession(id);
   };
 
@@ -1507,7 +1584,7 @@ async function createSession({ cwd = '', name = '', autoCmd = '' }) {
   term.open(bodyEl);
   term.onData(d => invoke('terminal_write', { id, data: d }).catch(() => {}));
 
-  sessions.set(id, { term, fit, tabEl, bodyEl, name: label, status: 'running', cwd });
+  sessions.set(id, { term, fit, tabEl, bodyEl, name: label, status: 'running', cwd, tool: autoCmd });
 
   openDock();
   activateSession(id);

@@ -181,6 +181,19 @@ fn delete_project(state: State<Mutex<AppState>>, id: String) -> Result<(), Strin
     Ok(())
 }
 
+/// 重命名分组：把该组下所有项目的 group 字段批量改名（分组无独立实体，靠 group 字段聚合）。
+#[tauri::command]
+fn rename_group(state: State<Mutex<AppState>>, old: String, new: String) -> Result<(), String> {
+    let mut state = state.lock().map_err(|e| e.to_string())?;
+    for p in state.projects.iter_mut() {
+        if p.group == old {
+            p.group = new.clone();
+        }
+    }
+    state.save_projects()?;
+    Ok(())
+}
+
 #[tauri::command]
 fn export_excel(state: State<Mutex<AppState>>) -> Result<String, String> {
     let state = state.lock().map_err(|e| e.to_string())?;
@@ -796,6 +809,7 @@ pub fn run() {
             add_project,
             update_project,
             delete_project,
+            rename_group,
             export_excel,
             open_folder,
             open_folder_dialog,
