@@ -11,7 +11,7 @@ A desktop app for managing your Vibe Coding projects, built with Tauri v2.
 - **Server management** — configure SSH servers (host, port, user, password/key login method)
 - **Grouping** — group projects, collapsible sidebar, click to locate, rename a group inline (hover → pencil; all projects in it move together)
 - **Built-in terminal** — in-app bottom-drawer tabbed terminal managing all sessions; file tree, file preview, color themes, font size, drag-to-insert path; closing a tab asks first and reminds you to let the AI update its memory (see [Using the terminal](#using-the-built-in-terminal))
-- **Multi AI CLI launch** — start **Claude / Codex / opencode** in a project directory from the project card, with a tool badge on the tab
+- **Multi AI CLI launch** — start **Claude / Codex / opencode / Gemini / agy** in a project directory from the project card, with a tool badge on the tab
 - **Scan & import** — batch-import git projects from a directory (auto-reads remote, dedups by path)
 - **Search** — quickly filter by name, path, description
 - **Export** — export project data to Excel
@@ -33,10 +33,10 @@ A desktop app for managing your Vibe Coding projects, built with Tauri v2.
 A bottom-drawer terminal — open it from a project card's terminal icon or the floating button at the bottom-right.
 
 **Launch an AI CLI**
-- Click the terminal icon on a project card → a menu pops up: **Open Claude / Open Codex / Open opencode**
-- A new tab is created, `cd`s into the project directory and runs the command; the tab shows a tool badge (claude orange / codex blue / opencode green)
+- Click the terminal icon on a project card → a menu pops up: **Open Claude / Open Codex / Open opencode / Open Gemini / Open agy**
+- A new tab is created, `cd`s into the project directory and runs the command; the tab shows a tool badge (claude orange / codex blue / opencode green / gemini purple / agy cyan)
 - The **+** at the top-left opens a blank terminal (no CLI)
-- Prerequisite: `codex` / `opencode` must be installed and on your PATH (the terminal uses a login shell, so it will find them)
+- Prerequisite: the corresponding CLI (`codex` / `opencode` / `gemini` / `agy`) must be installed and on your PATH (the terminal uses a login shell, so it will find them)
 
 **File tree + preview** (left)
 - The tree is rooted at the active tab's project directory and follows tab switches; folders load lazily on click

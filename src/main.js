@@ -1582,6 +1582,15 @@ async function createSession({ cwd = '', name = '', autoCmd = '' }) {
   const fit = new window.FitAddon.FitAddon();
   term.loadAddon(fit);
   term.open(bodyEl);
+  // WebGL 渲染器：默认 DOM 渲染器在触控板滚动时选区会糊成一大块（ghosting），
+  // 改用 GPU 渲染正确重绘选区/滚动。WebGL 不可用或上下文丢失时安全降级回默认渲染器。
+  try {
+    const webgl = new window.WebglAddon.WebglAddon();
+    webgl.onContextLoss(() => webgl.dispose());
+    term.loadAddon(webgl);
+  } catch (_) {
+    /* WKWebView 无 WebGL 时退回默认 DOM 渲染器 */
+  }
   term.onData(d => invoke('terminal_write', { id, data: d }).catch(() => {}));
 
   sessions.set(id, { term, fit, tabEl, bodyEl, name: label, status: 'running', cwd, tool: autoCmd });
