@@ -21,6 +21,7 @@ use portable_pty::{Child, MasterPty};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::io::Write;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast;
 
@@ -59,6 +60,9 @@ pub struct RemoteHub {
     pub exit_tx: broadcast::Sender<String>,
     pub token: Arc<Mutex<String>>,
     pub port: u16,
+    /// axum 服务是否已起。按需启动：用户首次打开「手机远程」面板才监听端口，
+    /// 不用就永不对外暴露（compare_exchange 保证只起一次）。
+    started: Arc<AtomicBool>,
 }
 
 impl RemoteHub {
@@ -73,16 +77,24 @@ impl RemoteHub {
             exit_tx,
             token: Arc::new(Mutex::new(String::new())),
             port,
+            started: Arc::new(AtomicBool::new(false)),
         }
     }
 
+    /// 首次调用返回 true（并把状态置为已启动），之后恒返回 false。用于「按需起服务」。
+    pub fn start_if_needed(&self) -> bool {
+        self.started
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+    }
+
     /// 由 reader 线程调用：把一段输出同时广播给 WS 客户端并追加进滚动缓存。
-    pub fn publish(&self, id: &str, raw: &[u8]) {
-        let data = base64::engine::general_purpose::STANDARD.encode(raw);
+    /// `encoded` 由调用方算好（与桌面事件复用同一次 base64，避免对同一块编码两遍）。
+    pub fn publish(&self, id: &str, raw: &[u8], encoded: String) {
         // 没有订阅者时 send 返回 Err，忽略即可。
         let _ = self.output_tx.send(OutputMsg {
             id: id.to_string(),
-            data,
+            data: encoded,
         });
         if let Ok(mut sb) = self.scrollback.lock() {
             let buf = sb.entry(id.to_string()).or_default();
@@ -94,15 +106,23 @@ impl RemoteHub {
         }
     }
 
-    /// 由 reader 线程在 EOF 时调用：广播退出并清理该会话的缓存/元信息。
-    pub fn mark_exit(&self, id: &str) {
-        let _ = self.exit_tx.send(id.to_string());
+    /// 从所有表里移除一个会话（sessions / metas / scrollback），返回被移除的 PtySession（若有）。
+    /// 手动关闭和 PTY 自行 EOF 两条路径都走这里，避免「删了 A 表忘了 B 表」式泄漏。
+    /// 锁逐个获取、各自即刻释放，不嵌套——与文件内其他用法一致，无死锁风险。
+    pub fn cleanup_session(&self, id: &str) -> Option<PtySession> {
         if let Ok(mut sb) = self.scrollback.lock() {
             sb.remove(id);
         }
         if let Ok(mut m) = self.metas.lock() {
             m.remove(id);
         }
+        self.sessions.lock().ok().and_then(|mut s| s.remove(id))
+    }
+
+    /// 由 reader 线程在 EOF 时调用：广播退出并清理该会话（含 sessions，防 PtySession 泄漏）。
+    pub fn mark_exit(&self, id: &str) {
+        let _ = self.exit_tx.send(id.to_string());
+        let _ = self.cleanup_session(id);
     }
 }
 
@@ -234,18 +254,8 @@ async fn handle_socket(mut socket: WebSocket, hub: RemoteHub, id: String) {
         }
     }
 
-    let snapshot = hub
-        .scrollback
-        .lock()
-        .ok()
-        .and_then(|sb| sb.get(&id).cloned());
-    if let Some(buf) = snapshot {
-        if !buf.is_empty() {
-            let d = base64::engine::general_purpose::STANDARD.encode(&buf);
-            if socket.send(Message::Text(out_frame(&d))).await.is_err() {
-                return;
-            }
-        }
+    if !send_scrollback(&mut socket, &hub, &id, false).await {
+        return;
     }
 
     loop {
@@ -257,8 +267,13 @@ async fn handle_socket(mut socket: WebSocket, hub: RemoteHub, id: String) {
                     }
                 }
                 Ok(_) => {}
-                // Lagged：客户端跟不上，丢了一些消息——继续即可（xterm 会在后续重绘自愈）。
-                Err(broadcast::error::RecvError::Lagged(_)) => {}
+                // Lagged：客户端跟不上丢了一段——这一段里可能含被切断的转义序列，
+                // 光等重绘不一定自愈。重发「整屏复位 + 滚动缓存」让 xterm 状态回到一致。
+                Err(broadcast::error::RecvError::Lagged(_)) => {
+                    if !send_scrollback(&mut socket, &hub, &id, true).await {
+                        break;
+                    }
+                }
                 Err(broadcast::error::RecvError::Closed) => break,
             },
             ex = exit_rx.recv() => match ex {
@@ -283,6 +298,31 @@ async fn handle_socket(mut socket: WebSocket, hub: RemoteHub, id: String) {
 fn out_frame(b64: &str) -> String {
     // {"t":"o","d":"<base64>"} —— 手裸拼 JSON，data 是 base64（无需转义）。
     format!("{{\"t\":\"o\",\"d\":\"{b64}\"}}")
+}
+
+/// 把会话的滚动缓存作为一个 'o' 帧发给客户端。`reset=true` 时在前面加 `\x1bc`
+/// （xterm 整屏复位），用于 Lagged 后清掉残缺状态再重放，避免错乱画面残留。
+/// 返回 false 表示 socket 已断，调用方应结束。
+async fn send_scrollback(socket: &mut WebSocket, hub: &RemoteHub, id: &str, reset: bool) -> bool {
+    let snap = hub
+        .scrollback
+        .lock()
+        .ok()
+        .and_then(|sb| sb.get(id).cloned());
+    let buf = match snap {
+        Some(b) if !b.is_empty() => b,
+        _ => return true,
+    };
+    let payload = if reset {
+        let mut v = Vec::with_capacity(buf.len() + 2);
+        v.extend_from_slice(b"\x1bc");
+        v.extend_from_slice(&buf);
+        v
+    } else {
+        buf
+    };
+    let d = base64::engine::general_purpose::STANDARD.encode(&payload);
+    socket.send(Message::Text(out_frame(&d))).await.is_ok()
 }
 
 /// 处理手机发来的消息：i=键入，r=resize。

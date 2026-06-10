@@ -176,6 +176,12 @@
       } catch (_) { return null; }
     }
 
+    // 转义后插入 innerHTML（name/tool 来自桌面会话，可能含 < > 等，避免破版 / 注入）
+    function esc(s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, c =>
+        ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
     function renderList(list) {
       const box = $('sessList');
       box.innerHTML = '';
@@ -186,10 +192,10 @@
       list.forEach(s => {
         const el = document.createElement('div');
         el.className = 'sess';
-        const tag = (s.tool || s.name || '?').slice(0, 4).toUpperCase();
+        const tag = esc((s.tool || s.name || '?').slice(0, 4).toUpperCase());
         el.innerHTML =
           '<div class="ic">' + tag + '</div>' +
-          '<div class="meta"><div class="nm"></div><div class="sub">' + (s.tool ? '工具 ' + s.tool : '终端会话') + '</div></div>' +
+          '<div class="meta"><div class="nm"></div><div class="sub">' + (s.tool ? '工具 ' + esc(s.tool) : '终端会话') + '</div></div>' +
           '<div class="go">›</div>';
         el.querySelector('.nm').textContent = s.name || s.id;
         el.onclick = () => openSession(s.id, s.name || s.id);
@@ -288,10 +294,16 @@
         let m; try { m = JSON.parse(ev.data); } catch (_) { return; }
         if (m.t === 'o') term.write(b64ToBytes(m.d));
         else if (m.t === 'size') applySize(m.cols, m.rows);
-        else if (m.t === 'exit') { term.write('\r\n\x1b[90m[会话已结束]\x1b[0m\r\n'); setConn('off'); }
+        else if (m.t === 'exit') {
+          term.write('\r\n\x1b[90m[会话已结束]\x1b[0m\r\n');
+          setConn('off');
+          // 会话已死：清掉 curId，阻止 onclose 触发的自动重连（否则会对死会话每 1.5s 重连一次）
+          curId = '';
+        }
       };
       ws.onclose = () => {
         setConn('off');
+        // 仅在「非正常断开」（curId 还在）时重连；exit 已把 curId 清空，不再重连死会话
         if (curId && $('termView').classList.contains('active')) {
           setTimeout(() => { if (curId) connectWs(); }, 1500);
         }

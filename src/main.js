@@ -762,7 +762,8 @@ function closeRemote() {
 }
 
 function copyText(text) {
-  if (!text || text === '—') return;
+  // 去掉占位符（单个或多个破折号，如获取失败时的「——————」）后为空则不复制
+  if (!text || !text.replace(/[—-]/g, '').trim()) return;
   navigator.clipboard.writeText(text).then(
     () => msg('已复制', 'success'),
     () => msg('复制失败', 'error')
@@ -1654,7 +1655,9 @@ async function createSession({ cwd = '', name = '', autoCmd = '' }) {
   updateFabBadge();
 
   try {
-    await invoke('terminal_create', { id, cwd, cols: term.cols || 80, rows: term.rows || 24, name: label, tool: autoCmd || '' });
+    // tool 只传工具名（命令首词，如 claude），不传整条命令——手机端用作标签/图标
+    const tool = (autoCmd || '').trim().split(/\s+/)[0] || '';
+    await invoke('terminal_create', { id, cwd, cols: term.cols || 80, rows: term.rows || 24, name: label, tool });
     fitSession(id);
     if (autoCmd) {
       setTimeout(() => invoke('terminal_write', { id, data: autoCmd + '\r' }).catch(() => {}), 400);

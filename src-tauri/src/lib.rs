@@ -741,15 +741,16 @@ fn terminal_create(
                 Ok(0) => break,
                 Ok(n) => {
                     let chunk = &buf[..n];
+                    // 同一块只 base64 一次，桌面事件与手机端广播共用（手机没连也只编这一次）
                     let data = base64::engine::general_purpose::STANDARD.encode(chunk);
                     let _ = app_evt.emit(
                         "terminal-output",
                         TerminalOutput {
                             id: sid.clone(),
-                            data,
+                            data: data.clone(),
                         },
                     );
-                    hub_evt.publish(&sid, chunk);
+                    hub_evt.publish(&sid, chunk, data);
                 }
                 Err(_) => break,
             }
@@ -822,17 +823,10 @@ fn terminal_resize(
 /// 关闭并清理一个会话（杀掉子进程）。
 #[tauri::command]
 fn terminal_close(state: State<TerminalState>, id: String) -> Result<(), String> {
-    let mut sessions = state.hub.sessions.lock().map_err(|e| e.to_string())?;
-    if let Some(mut session) = sessions.remove(&id) {
+    // 三个表（sessions/metas/scrollback）统一在 cleanup_session 里清，
+    // 与 reader 线程 EOF 路径（mark_exit）共用同一处逻辑，避免漏删某个表泄漏。
+    if let Some(mut session) = state.hub.cleanup_session(&id) {
         let _ = session.child.kill();
-    }
-    drop(sessions);
-    // 清理手机端列表里的该会话（reader 线程 EOF 时也会清，这里立即生效）
-    if let Ok(mut m) = state.hub.metas.lock() {
-        m.remove(&id);
-    }
-    if let Ok(mut sb) = state.hub.scrollback.lock() {
-        sb.remove(&id);
     }
     Ok(())
 }
@@ -872,10 +866,29 @@ fn make_qr_svg(data: &str) -> String {
     }
 }
 
+/// 生成 6 位随机 PIN（取 UUID 前 4 字节 mod 1_000_000，左补零）。
+fn random_pin() -> String {
+    let b = Uuid::new_v4().into_bytes();
+    format!("{:06}", u32::from_le_bytes([b[0], b[1], b[2], b[3]]) % 1_000_000)
+}
+
+/// 按需启动手机端服务：用户首次打开「手机远程」面板时才生成随机 PIN 并监听端口。
+/// 不打开就永不对外暴露；幂等（compare_exchange 保证只起一次）。
+fn ensure_remote_started(hub: &remote::RemoteHub) {
+    if hub.start_if_needed() {
+        let pin = random_pin();
+        if let Ok(mut t) = hub.token.lock() {
+            *t = pin;
+        }
+        remote::spawn_server(hub.clone());
+    }
+}
+
 /// 返回手机端连接信息（局域网地址 + PIN），桌面 UI 展示。
 /// 枚举所有网卡，局域网地址排前面；多网卡（有线/WiFi）全部列出供选择。
 #[tauri::command]
 fn terminal_remote_info(state: State<TerminalState>) -> RemoteInfo {
+    ensure_remote_started(&state.hub);
     let port = state.hub.port;
     let pin = state.hub.token.lock().map(|t| t.clone()).unwrap_or_default();
 
@@ -923,28 +936,9 @@ pub fn run() {
                     env!("CARGO_PKG_VERSION")
                 ));
             }
-            // 手机端 PIN：调试期固定为常量，方便反复连接。
-            // 上线前改回随机：let pin = { let b = Uuid::new_v4().into_bytes();
-            //   format!("{:06}", u32::from_le_bytes([b[0],b[1],b[2],b[3]]) % 1_000_000) };
-            let term_state = app.state::<TerminalState>();
-            let pin = "123456".to_string();
-            if let Ok(mut t) = term_state.hub.token.lock() {
-                *t = pin.clone();
-            }
-            // 取第一个局域网地址用于日志（排除 Tailscale）
-            let ip = local_ip_address::list_afinet_netifas()
-                .ok()
-                .and_then(|ifaces| {
-                    ifaces.into_iter().find_map(|(_n, ip)| match ip {
-                        std::net::IpAddr::V4(v4) if classify_ipv4(v4) == Some("局域网") => {
-                            Some(v4.to_string())
-                        }
-                        _ => None,
-                    })
-                })
-                .unwrap_or_else(|| "<本机IP>".to_string());
-            println!("[remote] 手机端: http://{ip}:{REMOTE_PORT}  PIN: {pin}");
-            remote::spawn_server(term_state.hub.clone());
+            // 手机端服务不在启动时常驻：PIN 随机化 + 端口监听都推迟到用户首次打开
+            // 「手机远程」面板（terminal_remote_info → ensure_remote_started）。
+            // 不用该功能就永远不对外暴露端口。
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
