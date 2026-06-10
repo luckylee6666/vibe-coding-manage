@@ -1,13 +1,18 @@
 use base64::Engine;
-use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
+use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
+
+mod remote;
+use remote::{PtySession, RemoteHub, SessionMeta};
+
+/// 手机端远程服务监听端口（局域网）。
+const REMOTE_PORT: u16 = 8787;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -640,16 +645,18 @@ fn trash_path(path: String) -> Result<(), String> {
 
 // ========== 内置终端（PTY）==========
 
-/// 一个活跃的伪终端会话：保留 master（用于 resize）、writer（写入键入）、child（用于 kill）
-struct PtySession {
-    master: Box<dyn MasterPty + Send>,
-    writer: Box<dyn Write + Send>,
-    child: Box<dyn Child + Send + Sync>,
+/// 终端状态：持有共享的 RemoteHub（会话表 / 滚动缓存 / 广播通道 / PIN）。
+/// 桌面命令与内嵌的手机端服务都操作同一个 hub（克隆即共享 Arc）。
+struct TerminalState {
+    hub: RemoteHub,
 }
 
-#[derive(Default)]
-struct TerminalState {
-    sessions: Mutex<HashMap<String, PtySession>>,
+impl Default for TerminalState {
+    fn default() -> Self {
+        Self {
+            hub: RemoteHub::new(REMOTE_PORT),
+        }
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -657,6 +664,25 @@ struct TerminalOutput {
     id: String,
     /// base64 编码的原始字节（避免 UTF-8 切断转义序列 / 多字节字符）
     data: String,
+}
+
+/// 一个可访问地址（带网络类型标注 + 扫码用二维码）。
+#[derive(Clone, Serialize)]
+struct RemoteAddr {
+    /// 网络类型："局域网" / "其他"
+    kind: String,
+    ip: String,
+    url: String,
+    /// 二维码 SVG（编码 url?k=PIN，扫码即自动带 PIN 登录）
+    qr: String,
+}
+
+/// 手机端连接信息，桌面 UI 展示给用户。
+#[derive(Clone, Serialize)]
+struct RemoteInfo {
+    addrs: Vec<RemoteAddr>,
+    port: u16,
+    pin: String,
 }
 
 /// 创建一个新的终端会话，在 `cwd` 起一个登录 shell，并把输出流式推到前端。
@@ -668,6 +694,8 @@ fn terminal_create(
     cwd: String,
     cols: u16,
     rows: u16,
+    name: Option<String>,
+    tool: Option<String>,
 ) -> Result<(), String> {
     let pty_system = native_pty_system();
     let pair = pty_system
@@ -702,16 +730,18 @@ fn terminal_create(
     let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
     let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
 
-    // 后台线程持续读 PTY 输出，base64 后通过事件推给前端
+    // 后台线程持续读 PTY 输出：base64 后同时推给桌面窗口（Tauri 事件）和手机端（WS 广播 + 滚动缓存）
     let app_evt = app.clone();
     let sid = id.clone();
+    let hub_evt = state.hub.clone();
     std::thread::spawn(move || {
         let mut buf = [0u8; 8192];
         loop {
             match reader.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
-                    let data = base64::engine::general_purpose::STANDARD.encode(&buf[..n]);
+                    let chunk = &buf[..n];
+                    let data = base64::engine::general_purpose::STANDARD.encode(chunk);
                     let _ = app_evt.emit(
                         "terminal-output",
                         TerminalOutput {
@@ -719,14 +749,27 @@ fn terminal_create(
                             data,
                         },
                     );
+                    hub_evt.publish(&sid, chunk);
                 }
                 Err(_) => break,
             }
         }
         let _ = app_evt.emit("terminal-exit", &sid);
+        hub_evt.mark_exit(&sid);
     });
 
+    // 注册会话元信息（供手机端列表展示）
+    state.hub.metas.lock().map_err(|e| e.to_string())?.insert(
+        id.clone(),
+        SessionMeta {
+            id: id.clone(),
+            name: name.unwrap_or_else(|| id.clone()),
+            tool: tool.unwrap_or_default(),
+        },
+    );
+
     state
+        .hub
         .sessions
         .lock()
         .map_err(|e| e.to_string())?
@@ -744,7 +787,7 @@ fn terminal_create(
 /// 把前端的键入（已是 UTF-8 文本）写进对应会话的 PTY。
 #[tauri::command]
 fn terminal_write(state: State<TerminalState>, id: String, data: String) -> Result<(), String> {
-    let mut sessions = state.sessions.lock().map_err(|e| e.to_string())?;
+    let mut sessions = state.hub.sessions.lock().map_err(|e| e.to_string())?;
     let session = sessions.get_mut(&id).ok_or("会话不存在")?;
     session
         .writer
@@ -762,7 +805,7 @@ fn terminal_resize(
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
-    let sessions = state.sessions.lock().map_err(|e| e.to_string())?;
+    let sessions = state.hub.sessions.lock().map_err(|e| e.to_string())?;
     let session = sessions.get(&id).ok_or("会话不存在")?;
     session
         .master
@@ -779,11 +822,89 @@ fn terminal_resize(
 /// 关闭并清理一个会话（杀掉子进程）。
 #[tauri::command]
 fn terminal_close(state: State<TerminalState>, id: String) -> Result<(), String> {
-    let mut sessions = state.sessions.lock().map_err(|e| e.to_string())?;
+    let mut sessions = state.hub.sessions.lock().map_err(|e| e.to_string())?;
     if let Some(mut session) = sessions.remove(&id) {
         let _ = session.child.kill();
     }
+    drop(sessions);
+    // 清理手机端列表里的该会话（reader 线程 EOF 时也会清，这里立即生效）
+    if let Ok(mut m) = state.hub.metas.lock() {
+        m.remove(&id);
+    }
+    if let Ok(mut sb) = state.hub.scrollback.lock() {
+        sb.remove(&id);
+    }
     Ok(())
+}
+
+/// 把一个 IPv4 分类为「局域网」/「其他」；返回 None 表示该地址不适合展示
+/// （回环、链路本地，以及 Tailscale/CGNAT 100.64.0.0/10——先不接 Tailscale，直接排除）。
+fn classify_ipv4(ip: std::net::Ipv4Addr) -> Option<&'static str> {
+    if ip.is_loopback() || ip.is_link_local() || ip.is_unspecified() {
+        return None;
+    }
+    let o = ip.octets();
+    // Tailscale / CGNAT 100.64.0.0/10：本期不展示
+    if o[0] == 100 && (64..=127).contains(&o[1]) {
+        return None;
+    }
+    if o[0] == 10
+        || (o[0] == 172 && (16..=31).contains(&o[1]))
+        || (o[0] == 192 && o[1] == 168)
+    {
+        return Some("局域网");
+    }
+    Some("其他")
+}
+
+/// 把字符串编码成二维码 SVG（深蓝点 + 白底，留白边便于扫描）。
+fn make_qr_svg(data: &str) -> String {
+    use qrcode::render::svg;
+    match qrcode::QrCode::new(data.as_bytes()) {
+        Ok(code) => code
+            .render::<svg::Color>()
+            .min_dimensions(168, 168)
+            .quiet_zone(true)
+            .dark_color(svg::Color("#0f172a"))
+            .light_color(svg::Color("#ffffff"))
+            .build(),
+        Err(_) => String::new(),
+    }
+}
+
+/// 返回手机端连接信息（局域网地址 + PIN），桌面 UI 展示。
+/// 枚举所有网卡，局域网地址排前面；多网卡（有线/WiFi）全部列出供选择。
+#[tauri::command]
+fn terminal_remote_info(state: State<TerminalState>) -> RemoteInfo {
+    let port = state.hub.port;
+    let pin = state.hub.token.lock().map(|t| t.clone()).unwrap_or_default();
+
+    let mut addrs: Vec<RemoteAddr> = Vec::new();
+    if let Ok(ifaces) = local_ip_address::list_afinet_netifas() {
+        for (_name, ip) in ifaces {
+            if let std::net::IpAddr::V4(v4) = ip {
+                if let Some(kind) = classify_ipv4(v4) {
+                    let s = v4.to_string();
+                    if addrs.iter().any(|a| a.ip == s) {
+                        continue; // 去重
+                    }
+                    let url = format!("http://{s}:{port}");
+                    // 二维码编码 url?k=PIN，手机扫码打开即自动登录
+                    let qr = make_qr_svg(&format!("{url}/?k={pin}"));
+                    addrs.push(RemoteAddr {
+                        kind: kind.to_string(),
+                        url,
+                        ip: s,
+                        qr,
+                    });
+                }
+            }
+        }
+    }
+    // 局域网优先
+    addrs.sort_by_key(|a| if a.kind == "局域网" { 0 } else { 1 });
+
+    RemoteInfo { addrs, port, pin }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -802,6 +923,28 @@ pub fn run() {
                     env!("CARGO_PKG_VERSION")
                 ));
             }
+            // 手机端 PIN：调试期固定为常量，方便反复连接。
+            // 上线前改回随机：let pin = { let b = Uuid::new_v4().into_bytes();
+            //   format!("{:06}", u32::from_le_bytes([b[0],b[1],b[2],b[3]]) % 1_000_000) };
+            let term_state = app.state::<TerminalState>();
+            let pin = "123456".to_string();
+            if let Ok(mut t) = term_state.hub.token.lock() {
+                *t = pin.clone();
+            }
+            // 取第一个局域网地址用于日志（排除 Tailscale）
+            let ip = local_ip_address::list_afinet_netifas()
+                .ok()
+                .and_then(|ifaces| {
+                    ifaces.into_iter().find_map(|(_n, ip)| match ip {
+                        std::net::IpAddr::V4(v4) if classify_ipv4(v4) == Some("局域网") => {
+                            Some(v4.to_string())
+                        }
+                        _ => None,
+                    })
+                })
+                .unwrap_or_else(|| "<本机IP>".to_string());
+            println!("[remote] 手机端: http://{ip}:{REMOTE_PORT}  PIN: {pin}");
+            remote::spawn_server(term_state.hub.clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -828,7 +971,8 @@ pub fn run() {
             terminal_create,
             terminal_write,
             terminal_resize,
-            terminal_close
+            terminal_close,
+            terminal_remote_info
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

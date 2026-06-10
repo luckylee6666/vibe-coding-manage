@@ -368,6 +368,13 @@ function bind() {
     openServerList();
   };
 
+  // 手机远程入口
+  $('remote-entry').onclick = openRemote;
+  $('remote-close').onclick = closeRemote;
+  $('remote-ok').onclick = closeRemote;
+  $('remote-overlay').onclick = e => { if (e.target === $('remote-overlay')) closeRemote(); };
+  $('remote-copy-pin').onclick = () => copyText($('remote-pin').textContent);
+
   // 扫描导入
   el.scanBtn.onclick = startScan;
   el.scanModalClose.onclick = closeScanModal;
@@ -714,6 +721,52 @@ function openServerList() {
 
 function closeServerList() {
   el.serverListOverlay.classList.remove('active');
+}
+
+// ===== 手机远程 =====
+async function openRemote() {
+  $('remote-overlay').classList.add('active');
+  const box = $('remote-addrs');
+  box.innerHTML = '<div class="remote-loading">获取地址中…</div>';
+  try {
+    const info = await invoke('terminal_remote_info');
+    $('remote-pin').textContent = info.pin;
+    const addrs = info.addrs || [];
+    if (!addrs.length) {
+      box.innerHTML = '<div class="remote-loading">未找到局域网地址，请检查是否已连接 WiFi / 网线。</div>';
+      return;
+    }
+    box.innerHTML = '';
+    addrs.forEach((a) => {
+      const card = document.createElement('div');
+      card.className = 'remote-card';
+      card.innerHTML =
+        `<div class="remote-qr">${a.qr || ''}</div>` +
+        `<div class="remote-card-info">` +
+          `<span class="remote-kind kind-${a.kind === '局域网' ? 'lan' : 'other'}">${esc(a.kind)}</span>` +
+          `<code class="remote-card-url">${esc(a.url)}</code>` +
+          `<button class="btn btn-default btn-xs">复制地址</button>` +
+        `</div>`;
+      card.querySelector('button').onclick = () => copyText(a.url);
+      box.appendChild(card);
+    });
+  } catch (e) {
+    box.innerHTML = '<div class="remote-loading">获取失败</div>';
+    $('remote-pin').textContent = '——————';
+    msg('获取远程信息失败: ' + e, 'error');
+  }
+}
+
+function closeRemote() {
+  $('remote-overlay').classList.remove('active');
+}
+
+function copyText(text) {
+  if (!text || text === '—') return;
+  navigator.clipboard.writeText(text).then(
+    () => msg('已复制', 'success'),
+    () => msg('复制失败', 'error')
+  );
 }
 
 function renderServerList() {
@@ -1601,7 +1654,7 @@ async function createSession({ cwd = '', name = '', autoCmd = '' }) {
   updateFabBadge();
 
   try {
-    await invoke('terminal_create', { id, cwd, cols: term.cols || 80, rows: term.rows || 24 });
+    await invoke('terminal_create', { id, cwd, cols: term.cols || 80, rows: term.rows || 24, name: label, tool: autoCmd || '' });
     fitSession(id);
     if (autoCmd) {
       setTimeout(() => invoke('terminal_write', { id, data: autoCmd + '\r' }).catch(() => {}), 400);

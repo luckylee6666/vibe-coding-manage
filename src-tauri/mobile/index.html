@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<title>Vibe 远程终端</title>
+<link rel="stylesheet" href="/vendor/xterm.css" />
+<style>
+  :root {
+    --bg: #0f172a; --panel: #1e293b; --panel-2: #273449;
+    --border: #334155; --text: #e2e8f0; --muted: #94a3b8;
+    --accent: #3b82f6; --accent-2: #2563eb; --danger: #ef4444; --ok: #22c55e;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    overflow: hidden; }
+  body { display: flex; flex-direction: column;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+
+  .top { display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+    background: linear-gradient(180deg, var(--panel-2), var(--panel));
+    border-bottom: 1px solid var(--border); }
+  .top .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+  .top .dot.on { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+  .top .dot.off { background: var(--danger); }
+  .top .title { font-size: 14px; font-weight: 600; flex: 1; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+  .top button { background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 8px; padding: 6px 12px; font-size: 13px; }
+
+  .view { flex: 1; min-height: 0; display: none; flex-direction: column; }
+  .view.active { display: flex; }
+
+  .center { justify-content: center; align-items: center; gap: 16px; padding: 24px; }
+  .card { width: 100%; max-width: 420px; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 14px; padding: 20px; box-shadow: 0 8px 30px rgba(0,0,0,.35); }
+  .card h2 { margin: 0 0 4px; font-size: 18px; }
+  .card p { margin: 0 0 16px; color: var(--muted); font-size: 13px; }
+  .pin-input { width: 100%; font-size: 28px; letter-spacing: 10px; text-align: center;
+    padding: 14px; background: var(--bg); color: var(--text); border: 1px solid var(--border);
+    border-radius: 10px; outline: none; }
+  .pin-input:focus { border-color: var(--accent); }
+  .btn-primary { width: 100%; margin-top: 14px; padding: 13px; font-size: 15px; font-weight: 600;
+    color: #fff; background: linear-gradient(180deg, var(--accent), var(--accent-2));
+    border: none; border-radius: 10px; }
+  .err { color: var(--danger); font-size: 13px; margin-top: 10px; min-height: 18px; text-align: center; }
+
+  .list { width: 100%; max-width: 480px; display: flex; flex-direction: column; gap: 10px; }
+  .list-head { display: flex; align-items: center; justify-content: space-between; width: 100%; max-width: 480px; }
+  .list-head h2 { margin: 0; font-size: 17px; }
+  .sess { display: flex; align-items: center; gap: 12px; padding: 14px 16px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px; }
+  .sess:active { background: var(--panel-2); }
+  .sess .ic { width: 38px; height: 38px; border-radius: 9px; flex: none; display: grid; place-items: center;
+    font-size: 12px; font-weight: 700; color: #fff; background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
+  .sess .meta { flex: 1; min-width: 0; }
+  .sess .nm { font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sess .sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .sess .go { color: var(--muted); font-size: 20px; }
+  .empty { color: var(--muted); text-align: center; font-size: 14px; padding: 30px 0; }
+
+  #termHost { flex: 1; min-height: 0; background: #0b1120; padding: 6px 8px; overflow: hidden; }
+  .xterm { height: 100%; }
+  /* 触摸滚动终端历史（普通会话）；TUI 满屏时无滚动条也正常 */
+  .xterm .xterm-viewport { overflow-y: auto !important; -webkit-overflow-scrolling: touch; touch-action: pan-y; }
+  .keys { display: flex; gap: 6px; padding: 6px 8px; background: var(--panel);
+    border-top: 1px solid var(--border); overflow-x: auto; }
+  .keys button { flex: none; padding: 8px 12px; font-size: 13px; font-family: ui-monospace, monospace;
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 8px; }
+  .keys button:active { background: var(--accent); border-color: var(--accent); }
+  .inbar { display: flex; gap: 8px; padding: 8px;
+    background: var(--panel); border-top: 1px solid var(--border); }
+  .inbar input { flex: 1; padding: 11px 13px; font-size: 15px; background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 10px; outline: none; }
+  .inbar input:focus { border-color: var(--accent); }
+  .inbar .send { padding: 0 18px; font-weight: 600; color: #fff;
+    background: linear-gradient(180deg, var(--accent), var(--accent-2)); border: none; border-radius: 10px; }
+</style>
+</head>
+<body>
+  <div class="top">
+    <span class="dot" id="connDot"></span>
+    <span class="title" id="topTitle">Vibe 远程终端</span>
+    <button id="backBtn" style="display:none">会话</button>
+  </div>
+
+  <div class="view active center" id="loginView">
+    <div class="card">
+      <h2>输入 PIN</h2>
+      <p>在电脑端「手机远程」里查看 6 位 PIN</p>
+      <input class="pin-input" id="pinInput" type="tel" inputmode="numeric" maxlength="6" placeholder="••••••" />
+      <button class="btn-primary" id="pinBtn">连接</button>
+      <div class="err" id="loginErr"></div>
+    </div>
+  </div>
+
+  <div class="view center" id="listView">
+    <div class="list-head">
+      <h2>选择会话</h2>
+      <button id="refreshBtn">刷新</button>
+    </div>
+    <div class="list" id="sessList"></div>
+  </div>
+
+  <div class="view" id="termView">
+    <div id="termHost"></div>
+    <div class="keys" id="keysRow">
+      <button data-k="enter">⏎ 回车</button>
+      <button data-k="ctrlc">Ctrl+C</button>
+      <button data-k="esc">Esc</button>
+      <button data-k="tab">Tab</button>
+      <button data-k="up">↑</button>
+      <button data-k="down">↓</button>
+      <button data-k="left">←</button>
+      <button data-k="right">→</button>
+    </div>
+    <div class="inbar">
+      <input id="cmdInput" placeholder="输入命令，回车发送…" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" />
+      <button class="send" id="sendBtn">发送</button>
+    </div>
+  </div>
+
+  <script src="/vendor/xterm.js"></script>
+  <script src="/vendor/addon-fit.js"></script>
+  <script>
+  (function () {
+    const $ = (id) => document.getElementById(id);
+    const KEY = 'vibe-remote-pin';
+    const ESC = String.fromCharCode(27);
+    const SEQ = {
+      enter: '\r', tab: '\t', ctrlc: String.fromCharCode(3), esc: ESC,
+      up: ESC + '[A', down: ESC + '[B', right: ESC + '[C', left: ESC + '[D',
+    };
+    let pin = localStorage.getItem(KEY) || '';
+    // 扫码进入：URL 带 ?k=PIN 则自动登录（去掉地址栏里的明文 PIN）
+    const urlPin = new URLSearchParams(location.search).get('k');
+    if (urlPin) {
+      pin = urlPin;
+      localStorage.setItem(KEY, pin);
+      try { history.replaceState(null, '', location.pathname); } catch (_) {}
+    }
+    let term = null, fit = null, ws = null, curId = '', curName = '';
+
+    function show(view) {
+      ['loginView', 'listView', 'termView'].forEach(v => $(v).classList.toggle('active', v === view));
+      $('backBtn').style.display = view === 'termView' ? '' : 'none';
+    }
+    function setConn(state) { $('connDot').className = 'dot' + (state ? ' ' + state : ''); }
+
+    // 登录
+    $('pinBtn').onclick = tryLogin;
+    $('pinInput').addEventListener('keydown', e => { if (e.key === 'Enter') tryLogin(); });
+    if (pin) $('pinInput').value = pin;
+
+    async function tryLogin() {
+      const v = $('pinInput').value.trim();
+      if (!v) return;
+      pin = v;
+      $('loginErr').textContent = '';
+      const list = await fetchSessions();
+      if (list === null) { $('loginErr').textContent = 'PIN 错误或无法连接'; return; }
+      localStorage.setItem(KEY, pin);
+      renderList(list);
+      show('listView');
+    }
+
+    // 会话列表
+    async function fetchSessions() {
+      try {
+        const r = await fetch('/api/sessions?token=' + encodeURIComponent(pin));
+        if (!r.ok) return null;
+        return await r.json();
+      } catch (_) { return null; }
+    }
+
+    function renderList(list) {
+      const box = $('sessList');
+      box.innerHTML = '';
+      if (!list.length) {
+        box.innerHTML = '<div class="empty">电脑端还没有打开的终端会话。<br/>先在电脑上打开一个终端 / AI 会话。</div>';
+        return;
+      }
+      list.forEach(s => {
+        const el = document.createElement('div');
+        el.className = 'sess';
+        const tag = (s.tool || s.name || '?').slice(0, 4).toUpperCase();
+        el.innerHTML =
+          '<div class="ic">' + tag + '</div>' +
+          '<div class="meta"><div class="nm"></div><div class="sub">' + (s.tool ? '工具 ' + s.tool : '终端会话') + '</div></div>' +
+          '<div class="go">›</div>';
+        el.querySelector('.nm').textContent = s.name || s.id;
+        el.onclick = () => openSession(s.id, s.name || s.id);
+        box.appendChild(el);
+      });
+    }
+
+    $('refreshBtn').onclick = async () => {
+      const list = await fetchSessions();
+      if (list === null) { show('loginView'); return; }
+      renderList(list);
+    };
+    $('backBtn').onclick = async () => {
+      if (ws) { ws.close(); ws = null; }
+      curId = '';
+      const list = await fetchSessions();
+      renderList(list || []);
+      show('listView');
+    };
+
+    // 终端
+    let ptyCols = 80, ptyRows = 24;
+    function ensureTerm() {
+      if (term) return;
+      term = new window.Terminal({
+        fontSize: 12,
+        fontFamily: 'ui-monospace, "JetBrains Mono", Menlo, monospace',
+        cursorBlink: true,
+        scrollback: 8000,
+        theme: { background: '#0b1120', foreground: '#e2e8f0', cursor: '#3b82f6' },
+      });
+      term.open($('termHost'));
+      term.onData(d => sendInput(d));
+      // 方向/尺寸变化 → 按新宽度重算字号（不改 PTY，仅本地缩放）
+      window.addEventListener('resize', () => applySize(ptyCols, ptyRows));
+      window.addEventListener('orientationchange', () => setTimeout(() => applySize(ptyCols, ptyRows), 300));
+      setupTouchScroll();
+    }
+
+    // 镜像 PTY：列宽必须 = PTY 列宽（否则换行错乱），按宽度自动缩字号铺满；
+    // 行数则取「填满手机高度」与 PTY 行数的较大值——多出的行用历史回滚填，消除底部黑边。
+    // claude 是普通缓冲 TUI，只要列宽对、行数多无害；绝不反向 resize PTY。
+    function applySize(cols, rows) {
+      if (!term || !cols) return;
+      ptyCols = cols; ptyRows = rows || ptyRows;
+      const host = $('termHost');
+      const availW = host.clientWidth - 14;
+      const availH = host.clientHeight - 6;
+      // 字符宽 ≈ 0.6*fontSize；用 0.62 留余量，floor 取整，避免最右列被裁
+      let fs = Math.floor((availW / cols) / 0.62);
+      fs = Math.max(7, Math.min(15, fs));
+      if (term.options.fontSize !== fs) term.options.fontSize = fs;
+      const cellH = fs * 1.2;
+      const fitRows = Math.floor(availH / cellH);
+      const showRows = Math.max(ptyRows, fitRows, 1);
+      try { term.resize(cols, showRows); } catch (_) {}
+    }
+
+    // 自接管触摸滚动：xterm 内置触屏滚动不可靠，touchmove → term.scrollLines 最稳。
+    function setupTouchScroll() {
+      const host = $('termHost');
+      let lastY = null;
+      host.addEventListener('touchstart', e => {
+        lastY = e.touches[0].clientY;
+      }, { passive: true });
+      host.addEventListener('touchmove', e => {
+        if (lastY === null) return;
+        const y = e.touches[0].clientY;
+        const cell = (term.options.fontSize || 12) * 1.2; // 行高约 1.2em
+        const lines = (lastY - y) / cell;
+        const n = lines > 0 ? Math.floor(lines) : Math.ceil(lines);
+        if (n !== 0) { term.scrollLines(n); lastY = y; }
+      }, { passive: true });
+      const clear = () => { lastY = null; };
+      host.addEventListener('touchend', clear, { passive: true });
+      host.addEventListener('touchcancel', clear, { passive: true });
+    }
+
+    function openSession(id, name) {
+      curId = id; curName = name;
+      $('topTitle').textContent = name;
+      show('termView');
+      ensureTerm();
+      term.reset();
+      connectWs();
+    }
+
+    function connectWs() {
+      if (ws) { ws.close(); ws = null; }
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+      const url = proto + '://' + location.host + '/ws?token=' + encodeURIComponent(pin) + '&id=' + encodeURIComponent(curId);
+      setConn('off');
+      ws = new WebSocket(url);
+      ws.onopen = () => setConn('on');
+      ws.onmessage = (ev) => {
+        let m; try { m = JSON.parse(ev.data); } catch (_) { return; }
+        if (m.t === 'o') term.write(b64ToBytes(m.d));
+        else if (m.t === 'size') applySize(m.cols, m.rows);
+        else if (m.t === 'exit') { term.write('\r\n\x1b[90m[会话已结束]\x1b[0m\r\n'); setConn('off'); }
+      };
+      ws.onclose = () => {
+        setConn('off');
+        if (curId && $('termView').classList.contains('active')) {
+          setTimeout(() => { if (curId) connectWs(); }, 1500);
+        }
+      };
+      ws.onerror = () => setConn('off');
+    }
+
+    function sendInput(data) {
+      if (ws && ws.readyState === 1) ws.send(JSON.stringify({ t: 'i', d: data }));
+    }
+
+    $('keysRow').querySelectorAll('button').forEach(b => {
+      b.onclick = () => { sendInput(SEQ[b.dataset.k] || ''); term && term.focus(); };
+    });
+
+    function submitCmd() {
+      const inp = $('cmdInput');
+      sendInput(inp.value + '\r');
+      inp.value = '';
+    }
+    $('sendBtn').onclick = submitCmd;
+    $('cmdInput').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); submitCmd(); } });
+
+    function b64ToBytes(b64) {
+      const bin = atob(b64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      return bytes;
+    }
+
+    if (pin) {
+      fetchSessions().then(list => {
+        if (list === null) { show('loginView'); return; }
+        renderList(list);
+        show('listView');
+      });
+    }
+  })();
+  </script>
+</body>
+</html>

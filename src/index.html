@@ -52,6 +52,13 @@
               </svg>
               服务器管理
             </button>
+            <button class="btn" id="remote-entry">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <rect x="7" y="2.5" width="10" height="19" rx="2.5"/>
+                <path d="M11 18.5h2"/>
+              </svg>
+              手机远程
+            </button>
             <button class="btn" id="export-btn">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                 <path d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"/>
@@ -167,6 +174,35 @@
           <div class="modal-footer">
             <button class="btn btn-default" id="confirm-cancel">取消</button>
             <button class="btn btn-danger" id="confirm-delete">删除</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 手机远程 Modal -->
+    <div class="modal-mask" id="remote-overlay">
+      <div class="modal-wrap">
+        <div class="modal modal-sm">
+          <div class="modal-header">
+            <span class="modal-title">手机远程</span>
+            <button class="modal-x" id="remote-close">&times;</button>
+          </div>
+          <div class="modal-body">
+            <div class="remote-info">
+              <p class="remote-hint">手机与本机连同一 WiFi，用相机/浏览器<b>扫码即自动登录</b>；也可手动输地址 + PIN。</p>
+              <div class="remote-addrs" id="remote-addrs">
+                <div class="remote-loading">获取地址中…</div>
+              </div>
+              <div class="remote-row">
+                <span class="remote-label">PIN 码</span>
+                <code class="remote-val remote-pin" id="remote-pin">——————</code>
+                <button class="btn btn-default btn-xs" id="remote-copy-pin">复制</button>
+              </div>
+              <p class="remote-warn">⚠️ 此地址可在局域网内操作你电脑上的终端，PIN 勿外泄。</p>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-primary" id="remote-ok">知道了</button>
           </div>
         </div>
       </div>
