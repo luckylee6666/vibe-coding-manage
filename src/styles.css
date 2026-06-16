@@ -2064,6 +2064,36 @@ body {
 .usage-models { font-size: 12px; color: var(--text-2); }
 .usage-models b { color: var(--text-1); font-weight: 600; }
 
+/* CLI 切换 tab（claude / codex / opencode） */
+.usage-tabs { display: flex; gap: 4px; padding: 3px; border-radius: var(--radius-md);
+  background: var(--bg-2); border: 1px solid var(--border); }
+.usage-tab { flex: 1; padding: 6px 10px; border: none; background: transparent; cursor: pointer;
+  border-radius: calc(var(--radius-md) - 2px); font-size: 12.5px; font-weight: 600; color: var(--text-3);
+  transition: background .15s ease, color .15s ease; }
+.usage-tab:hover { color: var(--text-1); }
+.usage-tab.active { background: var(--bg-1); color: var(--blue-active); box-shadow: var(--shadow-sm); }
+
+/* 周用量列表 */
+.usage-weekly { display: flex; flex-direction: column; gap: 8px; padding: 14px;
+  border-radius: var(--radius-md); border: 1px solid var(--border); background: var(--bg-1); }
+.usage-weekly-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.usage-weekly-head > span:first-child { font-size: 13px; font-weight: 650; color: var(--text-1); }
+.usage-weekly-total { font-size: 11.5px; color: var(--text-3);
+  font-family: "JetBrains Mono", Menlo, monospace; }
+.usage-weekly-empty { padding: 14px 0; text-align: center; font-size: 12px; color: var(--text-3); }
+.usage-week-row { display: grid; grid-template-columns: 64px 1fr auto; align-items: center; gap: 10px; }
+.usage-week-date { font-size: 11.5px; color: var(--text-3);
+  font-family: "JetBrains Mono", Menlo, monospace; }
+.usage-week-barwrap { position: relative; height: 18px; border-radius: 4px; background: var(--bg-2);
+  overflow: hidden; display: flex; align-items: center; }
+.usage-week-bar { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 4px;
+  background: linear-gradient(90deg, var(--blue) 0%, var(--blue-hover) 100%); opacity: 0.22;
+  transition: width .4s ease; }
+.usage-week-tok { position: relative; z-index: 1; padding: 0 8px; font-size: 11px; color: var(--text-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.usage-week-cost { font-size: 13px; font-weight: 650; color: var(--text-1);
+  font-family: "JetBrains Mono", Menlo, monospace; text-align: right; min-width: 56px; }
+
 /* 自动 hello 区块 */
 .usage-auto { margin-top: 4px; padding: 14px; border-radius: var(--radius-md);
   border: 1px solid var(--border); background: var(--bg-1); display: flex; flex-direction: column; gap: 12px; }

@@ -197,6 +197,177 @@ fn parse_blocks(json: &str) -> Result<ClaudeUsage, String> {
     })
 }
 
+// ============================================================================
+// 多 CLI 周用量统计（claude / codex / opencode），同样走 ccusage 读本地日志。
+// ============================================================================
+
+/// 单个 CLI 的周用量统计。
+#[derive(Serialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentWeekly {
+    pub ok: bool,
+    pub error: Option<String>,
+    /// "claude" | "codex" | "opencode"
+    pub agent: String,
+    /// 累计总花费（USD）
+    pub total_cost: f64,
+    /// 累计总 token
+    pub total_tokens: u64,
+    /// 近若干周，按时间倒序（最新在前）
+    pub weeks: Vec<WeekRow>,
+}
+
+/// 一周的用量。
+#[derive(Serialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct WeekRow {
+    /// 周起始日（周一）YYYY-MM-DD
+    pub period: String,
+    pub cost_usd: f64,
+    pub total_tokens: u64,
+    pub models: Vec<String>,
+}
+
+/// 最多展示几周。
+const MAX_WEEKS: usize = 8;
+
+// ccusage 不同子命令字段名不统一：weekly 用 totalCost / period / modelsUsed，
+// codex daily 用 costUSD / date / models(对象)。下面几个取值器吸收差异。
+fn row_cost(o: &Value) -> f64 {
+    o.get("totalCost")
+        .or_else(|| o.get("costUSD"))
+        .and_then(|x| x.as_f64())
+        .unwrap_or(0.0)
+}
+fn row_tokens(o: &Value) -> u64 {
+    o.get("totalTokens").and_then(|x| x.as_u64()).unwrap_or(0)
+}
+fn row_period(o: &Value) -> String {
+    o.get("period")
+        .or_else(|| o.get("date"))
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string()
+}
+fn row_models(o: &Value) -> Vec<String> {
+    if let Some(arr) = o.get("modelsUsed").and_then(|x| x.as_array()) {
+        return arr.iter().filter_map(|x| x.as_str().map(String::from)).collect();
+    }
+    if let Some(obj) = o.get("models").and_then(|x| x.as_object()) {
+        return obj.keys().cloned().collect();
+    }
+    Vec::new()
+}
+
+/// 拉某个 agent 的周用量。claude/opencode 有原生 `weekly`；codex 只有 `daily`，
+/// 在此按 ISO 周（周一为起）聚合成周。
+pub fn fetch_agent_weekly(agent: &str) -> AgentWeekly {
+    // 白名单：agent 会拼进 shell 命令，杜绝注入
+    let agent = match agent {
+        "claude" | "opencode" | "codex" => agent,
+        other => {
+            return AgentWeekly {
+                ok: false,
+                agent: other.to_string(),
+                error: Some(format!("不支持的 agent：{other}")),
+                ..Default::default()
+            }
+        }
+    };
+    let sub = if agent == "codex" { "daily" } else { "weekly" };
+    let script = format!(
+        "ccusage {agent} {sub} --json 2>/dev/null || npx -y --prefer-offline ccusage {agent} {sub} --json 2>/dev/null"
+    );
+    match run_shell(&script, 90) {
+        Ok(json) => match parse_agent_weekly(&json, agent) {
+            Ok(mut w) => {
+                w.ok = true;
+                w.agent = agent.to_string();
+                w
+            }
+            Err(e) => AgentWeekly {
+                ok: false,
+                agent: agent.to_string(),
+                error: Some(format!("解析 ccusage 输出失败：{e}")),
+                ..Default::default()
+            },
+        },
+        Err(e) => AgentWeekly {
+            ok: false,
+            agent: agent.to_string(),
+            error: Some(if e.is_empty() {
+                format!("无法运行 ccusage（确认装了 Node/npx，且用过 {agent}）")
+            } else {
+                e
+            }),
+            ..Default::default()
+        },
+    }
+}
+
+fn parse_agent_weekly(json: &str, agent: &str) -> Result<AgentWeekly, String> {
+    let v: Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    let totals = v.get("totals");
+    let total_cost = totals.map(row_cost).unwrap_or(0.0);
+    let total_tokens = totals.map(row_tokens).unwrap_or(0);
+
+    let mut weeks: Vec<WeekRow> = if agent == "codex" {
+        aggregate_daily_to_weeks(&v)?
+    } else {
+        let arr = v
+            .get("weekly")
+            .and_then(|x| x.as_array())
+            .ok_or("缺少 weekly 字段")?;
+        arr.iter()
+            .map(|o| WeekRow {
+                period: row_period(o),
+                cost_usd: row_cost(o),
+                total_tokens: row_tokens(o),
+                models: row_models(o),
+            })
+            .collect()
+    };
+    // 按周起始日倒序（最新在前），只留最近 MAX_WEEKS 周
+    weeks.sort_by(|a, b| b.period.cmp(&a.period));
+    weeks.truncate(MAX_WEEKS);
+    Ok(AgentWeekly {
+        total_cost,
+        total_tokens,
+        weeks,
+        ..Default::default()
+    })
+}
+
+/// 把 codex 的 daily 数组按周一为起的周聚合。
+fn aggregate_daily_to_weeks(v: &Value) -> Result<Vec<WeekRow>, String> {
+    use chrono::{Datelike, Duration as Dur, NaiveDate};
+    let arr = v
+        .get("daily")
+        .and_then(|x| x.as_array())
+        .ok_or("缺少 daily 字段")?;
+    let mut map: std::collections::BTreeMap<String, WeekRow> = std::collections::BTreeMap::new();
+    for o in arr {
+        let date = row_period(o);
+        // 该日所在周的周一；解析失败就退化成按当日分组（不丢数据）
+        let monday = NaiveDate::parse_from_str(&date, "%Y-%m-%d")
+            .map(|d| d - Dur::days(d.weekday().num_days_from_monday() as i64))
+            .map(|d| d.format("%Y-%m-%d").to_string())
+            .unwrap_or_else(|_| date.clone());
+        let entry = map.entry(monday.clone()).or_insert_with(|| WeekRow {
+            period: monday.clone(),
+            ..Default::default()
+        });
+        entry.cost_usd += row_cost(o);
+        entry.total_tokens += row_tokens(o);
+        for m in row_models(o) {
+            if !entry.models.contains(&m) {
+                entry.models.push(m);
+            }
+        }
+    }
+    Ok(map.into_values().collect())
+}
+
 /// 触发一次 `claude -p hello`，开一个新 5h 窗口。返回 claude 的输出（成功时）。
 pub fn fire_hello() -> Result<String, String> {
     // 进 HOME 跑，避免落在某个奇怪 cwd；输入接 /dev/null 防止它等输入
@@ -285,5 +456,57 @@ mod tests {
         let u = parse_blocks(json).expect("应解析成功");
         assert!(!u.active);
         assert_eq!(u.total_tokens, 0);
+    }
+
+    #[test]
+    fn parse_native_weekly() {
+        // claude/opencode 原生 weekly 形态
+        let json = r#"{
+            "totals":{"totalCost":99.5,"totalTokens":1000},
+            "weekly":[
+                {"period":"2026-06-08","totalCost":40.0,"totalTokens":400,"modelsUsed":["claude-opus-4-8"]},
+                {"period":"2026-06-15","totalCost":59.5,"totalTokens":600,"modelsUsed":["claude-opus-4-8","claude-haiku-4-5"]}
+            ]
+        }"#;
+        let w = parse_agent_weekly(json, "claude").expect("应解析成功");
+        assert_eq!(w.total_cost, 99.5);
+        assert_eq!(w.total_tokens, 1000);
+        // 倒序：最新的 2026-06-15 在前
+        assert_eq!(w.weeks[0].period, "2026-06-15");
+        assert_eq!(w.weeks[0].cost_usd, 59.5);
+        assert_eq!(w.weeks[0].models.len(), 2);
+        assert_eq!(w.weeks[1].period, "2026-06-08");
+    }
+
+    #[test]
+    fn codex_daily_aggregates_into_weeks() {
+        // codex 只有 daily（字段名 costUSD / date / models 对象），按周聚合
+        // 2026-06-08 周一、2026-06-10 周三 → 同一周；2026-06-15 → 下一周
+        let json = r#"{
+            "totals":{"costUSD":12.0,"totalTokens":300},
+            "daily":[
+                {"date":"2026-06-08","costUSD":2.0,"totalTokens":50,"models":{"gpt-5.4":{}}},
+                {"date":"2026-06-10","costUSD":3.0,"totalTokens":70,"models":{"gpt-5.3-codex":{}}},
+                {"date":"2026-06-15","costUSD":7.0,"totalTokens":180,"models":{"gpt-5.4":{}}}
+            ]
+        }"#;
+        let w = parse_agent_weekly(json, "codex").expect("应解析成功");
+        assert_eq!(w.total_cost, 12.0);
+        assert_eq!(w.weeks.len(), 2);
+        // 倒序：本周（06-15 起）在前
+        assert_eq!(w.weeks[0].period, "2026-06-15");
+        assert_eq!(w.weeks[0].total_tokens, 180);
+        // 上一周：06-08 + 06-10 合并，周起为周一 06-08
+        assert_eq!(w.weeks[1].period, "2026-06-08");
+        assert!((w.weeks[1].cost_usd - 5.0).abs() < 1e-9);
+        assert_eq!(w.weeks[1].total_tokens, 120);
+        assert_eq!(w.weeks[1].models.len(), 2);
+    }
+
+    #[test]
+    fn unsupported_agent_errors() {
+        let w = fetch_agent_weekly("agy");
+        assert!(!w.ok);
+        assert_eq!(w.agent, "agy");
     }
 }

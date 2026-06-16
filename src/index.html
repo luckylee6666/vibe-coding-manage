@@ -213,14 +213,19 @@
       <div class="modal-wrap">
         <div class="modal modal-sm">
           <div class="modal-header">
-            <span class="modal-title">Claude 用量</span>
+            <span class="modal-title">用量统计</span>
             <button class="modal-x" id="usage-close">&times;</button>
           </div>
           <div class="modal-body">
+            <div class="usage-tabs" id="usage-tabs">
+              <button class="usage-tab active" data-agent="claude">Claude</button>
+              <button class="usage-tab" data-agent="codex">Codex</button>
+              <button class="usage-tab" data-agent="opencode">OpenCode</button>
+            </div>
             <div class="usage-body" id="usage-body">
               <div class="usage-loading">查询中…</div>
             </div>
-            <div class="usage-auto">
+            <div class="usage-auto" id="usage-auto">
               <label class="usage-auto-row">
                 <span class="usage-auto-text">
                   <b>窗口重置后自动 hello</b>

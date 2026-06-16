@@ -425,6 +425,13 @@ function bind() {
   $('usage-close').onclick = closeUsage;
   $('usage-ok').onclick = closeUsage;
   $('usage-refresh').onclick = () => loadUsage();
+  document.querySelectorAll('.usage-tab').forEach(tab => {
+    tab.onclick = () => {
+      if (tab.classList.contains('active')) return;
+      switchUsageTab(tab.dataset.agent);
+      loadUsage();
+    };
+  });
   $('usage-overlay').onclick = e => { if (e.target === $('usage-overlay')) closeUsage(); };
   $('usage-auto-hello').onchange = async (e) => {
     try { await invoke('set_auto_hello', { enabled: e.target.checked }); }
@@ -807,6 +814,8 @@ function closeRemote() {
 // ===== Claude 用量（5 小时窗口） =====
 let usageCountdownTimer = null;
 let usageResetEpoch = 0;
+let usageAgent = 'claude';      // 当前用量 tab：claude / codex / opencode
+let lastClaudeWeekly = null;    // 缓存 Claude 周用量，poller 重渲染窗口时不丢失
 
 const MODEL_NAMES = {
   'claude-opus-4-8': 'Opus 4.8', 'claude-opus-4-7': 'Opus 4.7', 'claude-opus-4-6': 'Opus 4.6',
@@ -827,6 +836,7 @@ const pad2 = (n) => String(n).padStart(2, '0');
 
 async function openUsage() {
   $('usage-overlay').classList.add('active');
+  switchUsageTab('claude');
   try { $('usage-auto-hello').checked = await invoke('get_auto_hello'); } catch {}
   loadUsage();
 }
@@ -835,23 +845,54 @@ function closeUsage() {
   stopUsageCountdown();
 }
 
+// 切 tab（不触发加载，仅改激活态 + 显隐自动 hello 区）。
+function switchUsageTab(agent) {
+  usageAgent = agent;
+  document.querySelectorAll('.usage-tab').forEach(t =>
+    t.classList.toggle('active', t.dataset.agent === agent));
+  // 「窗口重置后自动 hello」只对 Claude 有意义
+  $('usage-auto').style.display = agent === 'claude' ? '' : 'none';
+}
+
 async function loadUsage() {
+  const agent = usageAgent;
   const body = $('usage-body');
   body.innerHTML = '<div class="usage-loading">查询中…（首次走 npx 拉 ccusage，稍等）</div>';
   try {
-    renderUsage(await invoke('claude_usage'));
+    if (agent === 'claude') {
+      lastClaudeWeekly = null;
+      const u = await invoke('claude_usage');
+      if (usageAgent !== 'claude') return;          // 用户已切走
+      renderUsage(u);
+      // 周用量异步补在窗口下方，不阻塞窗口展示
+      invoke('agent_weekly', { agent: 'claude' }).then(w => {
+        if (usageAgent !== 'claude') return;
+        lastClaudeWeekly = w;
+        const existing = document.getElementById('usage-weekly-sec');
+        if (existing) existing.outerHTML = renderWeeklyHTML(w, '周用量');
+        else body.insertAdjacentHTML('beforeend', renderWeeklyHTML(w, '周用量'));
+      }).catch(() => {});
+    } else {
+      stopUsageCountdown();
+      const w = await invoke('agent_weekly', { agent });
+      if (usageAgent !== agent) return;
+      body.innerHTML = renderAgentHTML(w, agent);
+    }
   } catch (e) {
     stopUsageCountdown();
     body.innerHTML = `<div class="usage-error">查询失败：${esc(String(e))}</div>`;
   }
 }
 
+// Claude 5 小时窗口主视图（含下方周用量）。
 function renderUsage(u) {
+  if (usageAgent !== 'claude') return;
   const body = $('usage-body');
+  const weekly = lastClaudeWeekly ? renderWeeklyHTML(lastClaudeWeekly, '周用量') : '';
   if (!u || !u.ok) {
     stopUsageCountdown();
     body.innerHTML = `<div class="usage-error">${esc((u && u.error) || '查询失败')}<br><br>` +
-      `需本机装有 Node/npx 且用过 Claude Code：经 <code>ccusage</code> 读取 <code>~/.claude</code> 本地日志统计，不上传任何数据。</div>`;
+      `需本机装有 Node/npx 且用过 Claude Code：经 <code>ccusage</code> 读取 <code>~/.claude</code> 本地日志统计，不上传任何数据。</div>` + weekly;
     return;
   }
   if (!u.active) {
@@ -859,7 +900,7 @@ function renderUsage(u) {
     body.innerHTML = `<div class="usage-window reset">` +
       `<div class="usage-window-top"><span class="usage-countdown">无活跃窗口</span></div>` +
       `<div class="usage-reset-at">当前 5 小时窗口已重置 / 空闲。发一句 hello（或开启下方自动）即可立刻开新窗口。</div>` +
-      `</div>`;
+      `</div>` + weekly;
     return;
   }
   usageResetEpoch = Date.parse(u.endTime);
@@ -884,8 +925,52 @@ function renderUsage(u) {
         `<span class="usage-cell-sub">输出 ${fmtTokens(u.outputTokens)}</span></div>` +
       `<div class="usage-cell"><span class="usage-cell-label">模型</span>` +
         `<span class="usage-models">${(u.models && u.models.length) ? u.models.map(m => `<b>${esc(shortModel(m))}</b>`).join('、') : '—'}</span></div>` +
-    `</div>`;
+    `</div>` + weekly;
   startUsageCountdown(startEpoch);
+}
+
+// Codex / OpenCode tab：只有周用量（这两个没有 5h 窗口概念）。
+function renderAgentHTML(w, agent) {
+  const name = agent === 'codex' ? 'Codex' : 'OpenCode';
+  if (!w || !w.ok) {
+    return `<div class="usage-error">${esc((w && w.error) || '查询失败')}<br><br>` +
+      `需本机装有 Node/npx 且用过 ${esc(name)}：经 <code>ccusage ${esc(agent)}</code> 读取本地日志统计，不上传任何数据。</div>`;
+  }
+  return renderWeeklyHTML(w, name + ' 周用量');
+}
+
+// 周用量区块：标题 + 累计 + 逐周条形。w 为 AgentWeekly。
+function renderWeeklyHTML(w, title) {
+  if (!w || !w.ok) {
+    return `<div class="usage-weekly" id="usage-weekly-sec"><div class="usage-weekly-head"><span>${esc(title)}</span></div>` +
+      `<div class="usage-weekly-empty">${esc((w && w.error) || '暂无数据')}</div></div>`;
+  }
+  if (!w.weeks || !w.weeks.length) {
+    return `<div class="usage-weekly" id="usage-weekly-sec"><div class="usage-weekly-head"><span>${esc(title)}</span></div>` +
+      `<div class="usage-weekly-empty">暂无周用量数据</div></div>`;
+  }
+  const max = Math.max(...w.weeks.map(x => x.costUsd || 0), 0.0001);
+  const rows = w.weeks.map(x => {
+    const pct = Math.max(3, (x.costUsd || 0) / max * 100);
+    const models = (x.models && x.models.length) ? x.models.map(shortModel).join('、') : '';
+    return `<div class="usage-week-row">` +
+      `<span class="usage-week-date">${esc(weekLabel(x.period))}</span>` +
+      `<div class="usage-week-barwrap"><div class="usage-week-bar" style="width:${pct.toFixed(0)}%"></div>` +
+        `<span class="usage-week-tok">${fmtTokens(x.totalTokens)}${models ? ' · ' + esc(models) : ''}</span></div>` +
+      `<span class="usage-week-cost">$${(x.costUsd || 0).toFixed(2)}</span>` +
+      `</div>`;
+  }).join('');
+  return `<div class="usage-weekly" id="usage-weekly-sec">` +
+    `<div class="usage-weekly-head"><span>${esc(title)}</span>` +
+      `<span class="usage-weekly-total">累计 $${(w.totalCost || 0).toFixed(2)} · ${fmtTokens(w.totalTokens)}</span></div>` +
+    rows + `</div>`;
+}
+
+// 周一日期 → "MM/DD 当周"
+function weekLabel(period) {
+  const d = new Date(period + 'T00:00:00');
+  if (isNaN(d.getTime())) return period || '—';
+  return `${pad2(d.getMonth() + 1)}/${pad2(d.getDate())} 当周`;
 }
 
 function tickUsageCountdown(startEpoch) {
@@ -1237,12 +1322,18 @@ function shellQuotePath(p) {
 }
 
 // 应用配色方案：更新所有已开会话 + 终端面板背景，并持久化
+// 清空 WebGL 字形纹理图集：主题/字号/DPR 变化后，旧条目（旧色、旧字号）会残留成重影，
+// 主动清一次让渲染器按新状态重建。core 无此 API（DOM 渲染器）时静默跳过。
+function clearTermAtlas(term) {
+  try { term.clearTextureAtlas && term.clearTextureAtlas(); } catch (_) {}
+}
+
 function setTermTheme(key) {
   if (!TERM_THEMES[key]) return;
   currentTheme = key;
   localStorage.setItem('term-theme', key);
   const t = TERM_THEMES[key].theme;
-  sessions.forEach(s => { s.term.options.theme = t; });
+  sessions.forEach(s => { s.term.options.theme = t; clearTermAtlas(s.term); });
   termEl.bodies.style.background = t.background;
   renderThemeMenu();
 }
@@ -1275,8 +1366,21 @@ function setTermFontSize(size) {
   if (size === currentFontSize) return;
   currentFontSize = size;
   localStorage.setItem('term-fontsize', String(size));
-  sessions.forEach((s, id) => { s.term.options.fontSize = size; fitSession(id); });
+  sessions.forEach((s, id) => { s.term.options.fontSize = size; clearTermAtlas(s.term); fitSession(id); });
 }
+
+// DPR 变化（窗口在不同缩放的显示器间移动）会让 WebGL 图集坐标错位 → 花屏。
+// 监听并清图集 + 重新 fit。matchMedia 一次性触发，回调里重新挂监听。
+function watchDprChange() {
+  const dpr = window.devicePixelRatio || 1;
+  const mq = window.matchMedia(`(resolution: ${dpr}dppx)`);
+  const onChange = () => {
+    sessions.forEach((s, id) => { clearTermAtlas(s.term); fitSession(id); });
+    watchDprChange();
+  };
+  mq.addEventListener('change', onChange, { once: true });
+}
+watchDprChange();
 
 // ===== 文件树 + 内容预览 =====
 
@@ -1788,6 +1892,9 @@ async function createSession({ cwd = '', name = '', autoCmd = '' }) {
     cursorBlink: true,
     scrollback: 5000,
     theme: TERM_THEMES[currentTheme].theme,
+    // 默认 4.5：会为对比度再生成一批变体字形，配上彩色中文把 WebGL 纹理图集塞爆
+    // → 字形错位/残影。设 1 关掉对比度调整，大幅降低图集条目数（修中文花屏的关键）。
+    minimumContrastRatio: 1,
   });
   const fit = new window.FitAddon.FitAddon();
   term.loadAddon(fit);

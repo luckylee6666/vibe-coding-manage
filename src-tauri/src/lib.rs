@@ -950,6 +950,14 @@ fn set_auto_hello(state: State<usage::UsageState>, enabled: bool) -> Result<(), 
     state.save()
 }
 
+/// 查询某个 CLI 的周用量（claude / codex / opencode），走 ccusage。
+#[tauri::command]
+async fn agent_weekly(agent: String) -> Result<usage::AgentWeekly, String> {
+    tauri::async_runtime::spawn_blocking(move || usage::fetch_agent_weekly(&agent))
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// 手动立刻发一次 hello（开新窗口 / 测试）。
 #[tauri::command]
 async fn claude_hello_now() -> Result<String, String> {
@@ -1012,6 +1020,7 @@ pub fn run() {
             claude_usage,
             get_auto_hello,
             set_auto_hello,
+            agent_weekly,
             claude_hello_now
         ])
         .run(tauri::generate_context!())
