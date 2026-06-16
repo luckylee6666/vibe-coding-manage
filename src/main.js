@@ -82,6 +82,25 @@ const el = {
 async function init() {
   await load();
   bind();
+  bindUsageEvents();
+}
+
+// 自动 hello / 用量后台事件（与终端是否打开无关，启动即监听）
+async function bindUsageEvents() {
+  try {
+    const listen = window.__TAURI__.event.listen;
+    await listen('claude-usage', e => {
+      if ($('usage-overlay').classList.contains('active')) renderUsage(e.payload);
+    });
+    await listen('claude-hello-firing', () => {
+      msg('Claude 5 小时窗口已重置，正在自动发送 hello…', 'info');
+    });
+    await listen('claude-hello-fired', e => {
+      const p = e.payload || {};
+      if (p.ok) msg('已自动 hello，新的 5 小时窗口开始计时', 'success');
+      else msg('自动 hello 失败：' + (p.detail || '未知错误'), 'error');
+    });
+  } catch (e) { /* 非 Tauri 环境忽略 */ }
 }
 
 async function load() {
@@ -402,6 +421,30 @@ function bind() {
   termEl.collapseBtn.onclick = collapseDock;
   termEl.maximizeBtn.onclick = toggleDockMaximize;
   termEl.newBtn.onclick = () => createSession({});
+  termEl.usageBtn.onclick = openUsage;
+  $('usage-close').onclick = closeUsage;
+  $('usage-ok').onclick = closeUsage;
+  $('usage-refresh').onclick = () => loadUsage();
+  $('usage-overlay').onclick = e => { if (e.target === $('usage-overlay')) closeUsage(); };
+  $('usage-auto-hello').onchange = async (e) => {
+    try { await invoke('set_auto_hello', { enabled: e.target.checked }); }
+    catch (err) { msg('设置失败: ' + err, 'error'); e.target.checked = !e.target.checked; }
+  };
+  $('usage-hello-now').onclick = async () => {
+    const btn = $('usage-hello-now');
+    btn.disabled = true; btn.textContent = '发送中（约几秒）…';
+    try {
+      const reply = await invoke('claude_hello_now');
+      const snippet = String(reply || '').replace(/\s+/g, ' ').trim().slice(0, 50);
+      // 已有活跃窗口时只是往当前窗口加一次请求；窗口已重置时才是开新窗口
+      const sent = usageResetEpoch && Date.now() < usageResetEpoch
+        ? 'hello 已发送（当前窗口内）'
+        : 'hello 已发送，新的 5 小时窗口开始计时';
+      msg(`${sent}　claude：${snippet || '(空回复)'}`, 'success');
+      loadUsage();
+    } catch (err) { msg('发送失败: ' + err, 'error'); }
+    finally { btn.disabled = false; btn.textContent = '立刻发一次 hello'; }
+  };
   termEl.themeBtn.onclick = (e) => {
     e.stopPropagation();
     termEl.themeMenu.classList.contains('active') ? closeThemeMenu() : openThemeMenu();
@@ -761,6 +804,118 @@ function closeRemote() {
   $('remote-overlay').classList.remove('active');
 }
 
+// ===== Claude 用量（5 小时窗口） =====
+let usageCountdownTimer = null;
+let usageResetEpoch = 0;
+
+const MODEL_NAMES = {
+  'claude-opus-4-8': 'Opus 4.8', 'claude-opus-4-7': 'Opus 4.7', 'claude-opus-4-6': 'Opus 4.6',
+  'claude-sonnet-4-6': 'Sonnet 4.6', 'claude-haiku-4-5': 'Haiku 4.5', 'claude-fable-5': 'Fable 5',
+};
+function shortModel(m) {
+  if (MODEL_NAMES[m]) return MODEL_NAMES[m];
+  return String(m).replace(/^claude-/, '').replace(/-\d{8}$/, '');
+}
+function fmtTokens(n) {
+  n = n || 0;
+  if (n >= 1e9) return (n / 1e9).toFixed(1) + 'B';
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k';
+  return String(n);
+}
+const pad2 = (n) => String(n).padStart(2, '0');
+
+async function openUsage() {
+  $('usage-overlay').classList.add('active');
+  try { $('usage-auto-hello').checked = await invoke('get_auto_hello'); } catch {}
+  loadUsage();
+}
+function closeUsage() {
+  $('usage-overlay').classList.remove('active');
+  stopUsageCountdown();
+}
+
+async function loadUsage() {
+  const body = $('usage-body');
+  body.innerHTML = '<div class="usage-loading">查询中…（首次走 npx 拉 ccusage，稍等）</div>';
+  try {
+    renderUsage(await invoke('claude_usage'));
+  } catch (e) {
+    stopUsageCountdown();
+    body.innerHTML = `<div class="usage-error">查询失败：${esc(String(e))}</div>`;
+  }
+}
+
+function renderUsage(u) {
+  const body = $('usage-body');
+  if (!u || !u.ok) {
+    stopUsageCountdown();
+    body.innerHTML = `<div class="usage-error">${esc((u && u.error) || '查询失败')}<br><br>` +
+      `需本机装有 Node/npx 且用过 Claude Code：经 <code>ccusage</code> 读取 <code>~/.claude</code> 本地日志统计，不上传任何数据。</div>`;
+    return;
+  }
+  if (!u.active) {
+    usageResetEpoch = 0; stopUsageCountdown();
+    body.innerHTML = `<div class="usage-window reset">` +
+      `<div class="usage-window-top"><span class="usage-countdown">无活跃窗口</span></div>` +
+      `<div class="usage-reset-at">当前 5 小时窗口已重置 / 空闲。发一句 hello（或开启下方自动）即可立刻开新窗口。</div>` +
+      `</div>`;
+    return;
+  }
+  usageResetEpoch = Date.parse(u.endTime);
+  const startEpoch = Date.parse(u.startTime);
+  body.innerHTML =
+    `<div class="usage-window">` +
+      `<div class="usage-window-top">` +
+        `<span><span class="usage-countdown" id="usage-countdown">--:--</span> <span class="usage-countdown-label">后重置</span></span>` +
+        `<span class="usage-reset-at" id="usage-reset-at"></span>` +
+      `</div>` +
+      `<div class="usage-bar"><div class="usage-bar-fill" id="usage-bar-fill" style="width:0%"></div></div>` +
+    `</div>` +
+    `<div class="usage-grid">` +
+      `<div class="usage-cell"><span class="usage-cell-label">本窗口花费</span>` +
+        `<span class="usage-cell-val">$${(u.costUsd || 0).toFixed(2)}</span>` +
+        `${u.projectedCost ? `<span class="usage-cell-sub">预计到重置 $${u.projectedCost.toFixed(2)}</span>` : ''}</div>` +
+      `<div class="usage-cell"><span class="usage-cell-label">燃烧速率</span>` +
+        `<span class="usage-cell-val">${u.costPerHour ? '$' + u.costPerHour.toFixed(2) : '—'}</span>` +
+        `<span class="usage-cell-sub">每小时</span></div>` +
+      `<div class="usage-cell"><span class="usage-cell-label">总 Token</span>` +
+        `<span class="usage-cell-val">${fmtTokens(u.totalTokens)}</span>` +
+        `<span class="usage-cell-sub">输出 ${fmtTokens(u.outputTokens)}</span></div>` +
+      `<div class="usage-cell"><span class="usage-cell-label">模型</span>` +
+        `<span class="usage-models">${(u.models && u.models.length) ? u.models.map(m => `<b>${esc(shortModel(m))}</b>`).join('、') : '—'}</span></div>` +
+    `</div>`;
+  startUsageCountdown(startEpoch);
+}
+
+function tickUsageCountdown(startEpoch) {
+  const cd = document.getElementById('usage-countdown');
+  if (!cd || !usageResetEpoch) return;
+  const now = Date.now();
+  const remain = Math.max(0, usageResetEpoch - now);
+  const h = Math.floor(remain / 3600000);
+  const m = Math.floor((remain % 3600000) / 60000);
+  const s = Math.floor((remain % 60000) / 1000);
+  cd.textContent = `${h}:${pad2(m)}:${pad2(s)}`;
+  const ra = document.getElementById('usage-reset-at');
+  if (ra) ra.textContent = '重置于 ' + new Date(usageResetEpoch).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+  const fill = document.getElementById('usage-bar-fill');
+  if (fill) {
+    const total = usageResetEpoch - startEpoch;
+    const pct = total > 0 ? Math.min(100, Math.max(0, (now - startEpoch) / total * 100)) : 0;
+    fill.style.width = pct.toFixed(1) + '%';
+  }
+  if (remain <= 0) { stopUsageCountdown(); loadUsage(); }
+}
+function startUsageCountdown(startEpoch) {
+  stopUsageCountdown();
+  tickUsageCountdown(startEpoch);
+  usageCountdownTimer = setInterval(() => tickUsageCountdown(startEpoch), 1000);
+}
+function stopUsageCountdown() {
+  if (usageCountdownTimer) { clearInterval(usageCountdownTimer); usageCountdownTimer = null; }
+}
+
 function copyText(text) {
   // 去掉占位符（单个或多个破折号，如获取失败时的「——————」）后为空则不复制
   if (!text || !text.replace(/[—-]/g, '').trim()) return;
@@ -961,6 +1116,7 @@ const termEl = {
   resize: $('terminal-resize'),
   newBtn: $('terminal-new-btn'),
   treeBtn: $('terminal-tree-btn'),
+  usageBtn: $('terminal-usage-btn'),
   themeBtn: $('terminal-theme-btn'),
   themeMenu: $('terminal-theme-menu'),
   maximizeBtn: $('terminal-maximize-btn'),

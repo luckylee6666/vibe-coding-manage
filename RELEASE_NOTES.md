@@ -1,15 +1,15 @@
 Cross-platform desktop app: macOS (Apple Silicon) + Windows (x64 / ARM64)
 跨平台桌面版：macOS (Apple Silicon) + Windows (x64 / ARM64)
 
-## What's new in v1.2.3 / 本版更新
+## What's new in v1.2.4 / 本版更新
 
 **English**
-- **More AI CLIs**: the launch menu now adds **Gemini** and **agy** (alongside Claude / Codex / opencode), each with its own tab badge color.
-- **Terminal scrolling fix**: switched the built-in terminal to the WebGL renderer, fixing the selection "ghosting" (a blue block smearing across the screen) when scrolling on a trackpad. Falls back to the default renderer where WebGL is unavailable.
+- **Claude usage panel** (5-hour window): a new clock icon in the terminal toolbar shows your current 5-hour billing window — live countdown to reset, cost + projected cost, burn rate, total/output tokens, and active models. Read locally via the community `ccusage` tool from `~/.claude`; nothing is uploaded.
+- **Auto-hello on window reset**: optional toggle that fires a tiny `claude -p hello` once the 5-hour window resets/goes idle, so a fresh window starts immediately. Includes a "send hello now" button.
 
 **中文**
-- **更多 AI CLI**：启动菜单新增 **Gemini** 和 **agy**（与 Claude / Codex / opencode 并列），各有独立 tab 色标。
-- **终端滚动修复**：内置终端改用 WebGL 渲染器，修复触控板滚动时选区「糊成一大片蓝」的 ghosting；不支持 WebGL 时自动降级回默认渲染器。
+- **Claude 用量面板**（5 小时窗口）：终端工具栏新增时钟图标，显示当前 5 小时计费窗口——实时倒计时、花费 + 预计花费、燃烧速率、总/输出 token、活跃模型。经社区工具 `ccusage` 读取本机 `~/.claude` 日志，不上传任何数据。
+- **窗口重置后自动 hello**：可选开关，5 小时窗口重置/空闲后自动发一句极小的 `claude -p hello`，立刻开新窗口重新计时；另有「立刻发一次 hello」按钮。
 
 ## Install / 安装
 

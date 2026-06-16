@@ -208,6 +208,40 @@
       </div>
     </div>
 
+    <!-- Claude 用量（5 小时窗口） -->
+    <div class="modal-mask" id="usage-overlay">
+      <div class="modal-wrap">
+        <div class="modal modal-sm">
+          <div class="modal-header">
+            <span class="modal-title">Claude 用量</span>
+            <button class="modal-x" id="usage-close">&times;</button>
+          </div>
+          <div class="modal-body">
+            <div class="usage-body" id="usage-body">
+              <div class="usage-loading">查询中…</div>
+            </div>
+            <div class="usage-auto">
+              <label class="usage-auto-row">
+                <span class="usage-auto-text">
+                  <b>窗口重置后自动 hello</b>
+                  <small>5 小时窗口结束后自动发一句 hello，立刻开新窗口、重新计时</small>
+                </span>
+                <span class="usage-switch">
+                  <input type="checkbox" id="usage-auto-hello" />
+                  <span class="usage-switch-slider"></span>
+                </span>
+              </label>
+              <button class="btn btn-default btn-xs" id="usage-hello-now">立刻发一次 hello</button>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-default" id="usage-refresh">刷新</button>
+            <button class="btn btn-primary" id="usage-ok">知道了</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- 服务器管理 Modal -->
     <div class="modal-mask" id="server-modal-overlay">
       <div class="modal-wrap">
@@ -314,6 +348,9 @@
           </button>
           <button class="term-tool-btn" id="terminal-tree-btn" title="文件树">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 5.25h7.5l1.5 2.25H21v11.25a.75.75 0 01-.75.75H3.75A.75.75 0 013 18.75z"/></svg>
+          </button>
+          <button class="term-tool-btn" id="terminal-usage-btn" title="Claude 用量（5 小时窗口）">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1018 0 9 9 0 00-18 0z"/><path d="M12 7v5l3 2"/></svg>
           </button>
           <div class="term-theme-wrap">
             <button class="term-tool-btn" id="terminal-theme-btn" title="配色主题">

@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 mod remote;
 use remote::{PtySession, RemoteHub, SessionMeta};
+mod usage;
 
 /// 手机端远程服务监听端口（局域网）。
 const REMOTE_PORT: u16 = 8787;
@@ -920,6 +921,43 @@ fn terminal_remote_info(state: State<TerminalState>) -> RemoteInfo {
     RemoteInfo { addrs, port, pin }
 }
 
+/// 查询当前 5 小时窗口的 Claude 用量（走 ccusage）。
+/// async + spawn_blocking：ccusage 要跑几秒，绝不能阻塞主线程（否则 UI 冻住）。
+#[tauri::command]
+async fn claude_usage(state: State<'_, usage::UsageState>) -> Result<usage::ClaudeUsage, String> {
+    let auto = state
+        .auto_hello
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let mut u = tauri::async_runtime::spawn_blocking(usage::fetch_usage)
+        .await
+        .map_err(|e| e.to_string())?;
+    u.auto_hello = auto;
+    Ok(u)
+}
+
+/// 读「5 小时重置后自动 hello」开关。
+#[tauri::command]
+fn get_auto_hello(state: State<usage::UsageState>) -> bool {
+    state.auto_hello.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// 设「5 小时重置后自动 hello」开关并持久化。
+#[tauri::command]
+fn set_auto_hello(state: State<usage::UsageState>, enabled: bool) -> Result<(), String> {
+    state
+        .auto_hello
+        .store(enabled, std::sync::atomic::Ordering::Relaxed);
+    state.save()
+}
+
+/// 手动立刻发一次 hello（开新窗口 / 测试）。
+#[tauri::command]
+async fn claude_hello_now() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(usage::fire_hello)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let state = Mutex::new(AppState::new());
@@ -928,7 +966,11 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(state)
         .manage(TerminalState::default())
+        .manage(usage::UsageState::load())
         .setup(|app| {
+            // 后台轮询：自动 hello 开启时，5h 窗口重置后自动触发开新窗口
+            let usage_app = app.handle().clone();
+            std::thread::spawn(move || usage::poller(usage_app));
             // 版本号显示在原生标题栏（来自 Cargo.toml，单一来源）
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.set_title(&format!(
@@ -966,7 +1008,11 @@ pub fn run() {
             terminal_write,
             terminal_resize,
             terminal_close,
-            terminal_remote_info
+            terminal_remote_info,
+            claude_usage,
+            get_auto_hello,
+            set_auto_hello,
+            claude_hello_now
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
