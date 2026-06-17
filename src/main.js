@@ -8,6 +8,7 @@ try {
 
 let projects = [];
 let servers = [];
+let snippets = [];
 let currentEditId = null;
 let pendingConfirm = null;
 let activeGroup = 'all';
@@ -108,6 +109,7 @@ async function load() {
   try {
     projects = await invoke('get_projects');
     servers = await invoke('get_servers');
+    try { snippets = await invoke('get_snippets'); } catch (_) { snippets = []; }
     renderGroups();
     render(projects);
     el.countAll.textContent = projects.length;
@@ -463,6 +465,16 @@ function bind() {
   termEl.newBtn.onclick = () => createSession({});
   termEl.bellBtn.onclick = toggleNotify;
   applyBellState();
+  // Prompt 片段库
+  termEl.snippetBtn.onclick = (ev) => { ev.stopPropagation(); toggleSnippetMenu(ev.currentTarget); };
+  $('snippet-modal-close').onclick = closeSnippetModal;
+  $('snippet-modal-overlay').onclick = e => { if (e.target === $('snippet-modal-overlay')) closeSnippetModal(); };
+  $('snippet-save-btn').onclick = saveSnippetFromEditor;
+  $('snippet-clear-btn').onclick = clearSnippetEditor;
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('#snippet-menu') && !e.target.closest('#terminal-snippet-btn')) closeSnippetMenu();
+  });
+  window.addEventListener('resize', closeSnippetMenu);
   // 窗口重新获得焦点时，正在看的会话就别再亮"需要关注"了 + 刷新 git 状态
   let gitFocusTimer = null;
   window.addEventListener('focus', () => {
@@ -1125,6 +1137,11 @@ function esc(s) {
   return d.innerHTML;
 }
 
+// 用于 HTML 属性值（如 title="..."）：在 esc 基础上再转义引号，防内容里的 " 截断属性
+function escAttr(s) {
+  return esc(s).replace(/"/g, '&quot;');
+}
+
 function short(p) {
   if (!p || p.length <= 30) return p || '';
   const parts = p.split(/[/\\]/);
@@ -1252,6 +1269,7 @@ const termEl = {
   treeBtn: $('terminal-tree-btn'),
   usageBtn: $('terminal-usage-btn'),
   bellBtn: $('terminal-bell-btn'),
+  snippetBtn: $('terminal-snippet-btn'),
   themeBtn: $('terminal-theme-btn'),
   themeMenu: $('terminal-theme-menu'),
   maximizeBtn: $('terminal-maximize-btn'),
@@ -1397,6 +1415,142 @@ async function restoreSessions(layout) {
     }
     try { await createSession({ cwd: it.cwd, name: it.name, autoCmd: cmd }); } catch (_) {}
   }
+}
+
+// ===== Prompt/Snippet 库：常用指令一键注入当前终端 =====
+const SNIPPET_ICONS = {
+  inject: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 9l5 5 5-5M12 14V3"/></svg>',
+  edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125"/></svg>',
+  del: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166M18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/></svg>',
+};
+function snippetPreview(text) {
+  const t = (text || '').replace(/\s+/g, ' ').trim();
+  return t.length > 44 ? t.slice(0, 44) + '…' : t;
+}
+
+function toggleSnippetMenu(anchorEl) {
+  const menu = $('snippet-menu');
+  if (menu.classList.contains('active')) { closeSnippetMenu(); return; }
+  renderSnippetMenu();
+  menu.classList.add('active'); // 先显示以测量尺寸
+  const r = anchorEl.getBoundingClientRect();
+  const left = Math.max(8, r.right - menu.offsetWidth);
+  let top = r.bottom + 6;
+  if (top + menu.offsetHeight > window.innerHeight - 8) top = r.top - menu.offsetHeight - 6;
+  menu.style.left = left + 'px';
+  menu.style.top = top + 'px';
+}
+function closeSnippetMenu() { $('snippet-menu').classList.remove('active'); }
+
+function renderSnippetMenu() {
+  const menu = $('snippet-menu');
+  const items = snippets.length
+    ? snippets.map(s => `
+        <div class="snippet-item" data-id="${s.id}" title="${escAttr(s.content)}">
+          <span class="snippet-item-title">${esc(s.title)}</span>
+          <span class="snippet-item-preview">${esc(snippetPreview(s.content))}</span>
+        </div>`).join('')
+    : '<div class="snippet-menu-empty">暂无片段，点下方「管理」添加</div>';
+  menu.innerHTML = items
+    + '<div class="snippet-menu-sep"></div>'
+    + `<div class="snippet-item snippet-item-manage" data-manage="1">${SNIPPET_ICONS.edit}<span>管理片段…</span></div>`;
+  menu.querySelectorAll('.snippet-item').forEach(it => {
+    it.onclick = () => {
+      if (it.dataset.manage) { closeSnippetMenu(); openSnippetModal(); return; }
+      const s = snippets.find(x => x.id === it.dataset.id);
+      closeSnippetMenu();
+      if (s) injectSnippet(s.content);
+    };
+  });
+}
+
+async function injectSnippet(content) {
+  if (!content) return;
+  let id = activeSession;
+  if (!id || !sessions.has(id)) {
+    id = await createSession({}); // 没有活动终端就先开一个空白的
+  }
+  openDock();
+  try { await invoke('terminal_write', { id, data: content }); }
+  catch (e) { msg('注入失败: ' + (e.message || e), 'error'); return; }
+  sessions.get(id)?.term.focus();
+}
+
+// ---- 片段管理 Modal ----
+let snippetEditId = null;
+function openSnippetModal() {
+  clearSnippetEditor();
+  renderSnippetList();
+  $('snippet-modal-overlay').classList.add('active');
+}
+function closeSnippetModal() { $('snippet-modal-overlay').classList.remove('active'); }
+function clearSnippetEditor() {
+  snippetEditId = null;
+  $('snippet-title').value = '';
+  $('snippet-content').value = '';
+  $('snippet-edit-hint').textContent = '';
+  $('snippet-save-btn').textContent = '保存片段';
+}
+function loadSnippetIntoEditor(s) {
+  snippetEditId = s.id;
+  $('snippet-title').value = s.title;
+  $('snippet-content').value = s.content;
+  $('snippet-edit-hint').textContent = '编辑中：' + s.title;
+  $('snippet-save-btn').textContent = '更新片段';
+  $('snippet-title').focus();
+}
+async function saveSnippetFromEditor() {
+  const title = $('snippet-title').value.trim();
+  const content = $('snippet-content').value;
+  if (!title) { msg('请填写标题', 'error'); $('snippet-title').focus(); return; }
+  if (!content.trim()) { msg('请填写内容', 'error'); $('snippet-content').focus(); return; }
+  if (snippetEditId) {
+    const s = snippets.find(x => x.id === snippetEditId);
+    if (s) { s.title = title; s.content = content; }
+  } else {
+    snippets.push({ id: '', title, content, createdAt: '' });
+  }
+  await persistSnippets();
+  clearSnippetEditor();
+  renderSnippetList();
+  msg('已保存', 'success');
+}
+async function persistSnippets() {
+  try { snippets = await invoke('save_snippets', { snippets }); }
+  catch (e) { msg('保存失败: ' + (e.message || e), 'error'); }
+}
+function renderSnippetList() {
+  const list = $('snippet-list');
+  const empty = $('snippet-empty');
+  if (!snippets.length) { list.style.display = 'none'; empty.style.display = ''; return; }
+  empty.style.display = 'none';
+  list.style.display = '';
+  list.innerHTML = snippets.map(s => `
+    <div class="snippet-row" data-id="${s.id}">
+      <div class="snippet-row-main">
+        <div class="snippet-row-title">${esc(s.title)}</div>
+        <div class="snippet-row-preview">${esc(snippetPreview(s.content))}</div>
+      </div>
+      <div class="snippet-row-actions">
+        <button class="action-btn snippet-inject-btn" title="注入当前终端">${SNIPPET_ICONS.inject}</button>
+        <button class="action-btn snippet-edit-btn" title="编辑">${SNIPPET_ICONS.edit}</button>
+        <button class="action-btn danger snippet-del-btn" title="删除">${SNIPPET_ICONS.del}</button>
+      </div>
+    </div>`).join('');
+  list.querySelectorAll('.snippet-row').forEach(row => {
+    const s = snippets.find(x => x.id === row.dataset.id);
+    if (!s) return;
+    row.querySelector('.snippet-inject-btn').onclick = () => { closeSnippetModal(); injectSnippet(s.content); };
+    row.querySelector('.snippet-edit-btn').onclick = () => loadSnippetIntoEditor(s);
+    row.querySelector('.snippet-del-btn').onclick = () => {
+      askConfirm('片段', s.title, async () => {
+        snippets = snippets.filter(x => x.id !== s.id);
+        await persistSnippets();
+        renderSnippetList();
+        msg('已删除', 'success');
+      });
+    };
+  });
 }
 
 function b64ToBytes(b64) {

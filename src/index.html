@@ -360,6 +360,9 @@
           <button class="term-tool-btn" id="terminal-bell-btn" title="会话提醒：AI 跑完/在等你时通知（点击开关）">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8a6 6 0 10-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg>
           </button>
+          <button class="term-tool-btn" id="terminal-snippet-btn" title="Prompt 片段库：一键注入常用指令">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><path d="M9 5a2 2 0 012-2h2a2 2 0 012 2v0a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/><path d="M9 12h6M9 16h4"/></svg>
+          </button>
           <div class="term-theme-wrap">
             <button class="term-tool-btn" id="terminal-theme-btn" title="配色主题">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3a9 9 0 100 18h1.6a2.4 2.4 0 002.4-2.4c0-.63-.25-1.2-.65-1.62a2.36 2.36 0 01-.65-1.6 2.4 2.4 0 012.4-2.38H19a3 3 0 003-3C22 6.13 17.97 3 12 3z"/><circle cx="7.5" cy="11.5" r="1.1" fill="currentColor" stroke="none"/><circle cx="11" cy="7.5" r="1.1" fill="currentColor" stroke="none"/><circle cx="16" cy="9" r="1.1" fill="currentColor" stroke="none"/></svg>
@@ -432,6 +435,34 @@
       <div class="launch-item" data-cmd="agy">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6.75 7.5l3 2.25-3 2.25m4.5 0h3M3.375 3h17.25c.621 0 1.125.504 1.125 1.125v15.75c0 .621-.504 1.125-1.125 1.125H3.375c-.621 0-1.125-.504-1.125-1.125V4.125C2.25 3.504 2.754 3 3.375 3z"/></svg>
         <span>打开 agy</span>
+      </div>
+    </div>
+
+    <!-- Prompt 片段库：快速注入下拉 -->
+    <div class="snippet-menu" id="snippet-menu"></div>
+
+    <!-- Prompt 片段库：管理 Modal -->
+    <div class="modal-mask" id="snippet-modal-overlay">
+      <div class="modal-wrap">
+        <div class="modal modal-lg">
+          <div class="modal-header">
+            <span class="modal-title">Prompt 片段库</span>
+            <button class="modal-x" id="snippet-modal-close">&times;</button>
+          </div>
+          <div class="modal-body">
+            <div class="snippet-editor">
+              <input class="form-input" type="text" id="snippet-title" placeholder="标题（如：更新记忆）" maxlength="60" />
+              <textarea class="form-input" id="snippet-content" rows="4" placeholder="片段内容，点击时注入到当前终端（不自动回车，可先检查再发送）"></textarea>
+              <div class="snippet-editor-actions">
+                <span class="snippet-edit-hint" id="snippet-edit-hint"></span>
+                <button class="btn btn-default btn-sm" id="snippet-clear-btn">清空</button>
+                <button class="btn btn-primary btn-sm" id="snippet-save-btn">保存片段</button>
+              </div>
+            </div>
+            <div class="snippet-list" id="snippet-list"></div>
+            <div class="server-empty" id="snippet-empty">暂无片段，在上方填写后「保存片段」</div>
+          </div>
+        </div>
       </div>
     </div>
 

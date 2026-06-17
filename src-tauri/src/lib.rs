@@ -57,12 +57,26 @@ pub struct Server {
     pub created_at: String,
 }
 
+/// Prompt/Snippet 库：可复用的指令片段，一键注入当前终端。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Snippet {
+    pub id: String,
+    pub title: String,
+    pub content: String,
+    #[serde(default, alias = "created_at")]
+    pub created_at: String,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct AppState {
     projects: Vec<Project>,
     servers: Vec<Server>,
+    #[serde(default)]
+    snippets: Vec<Snippet>,
     data_path: PathBuf,
     server_path: PathBuf,
+    snippet_path: PathBuf,
 }
 
 impl AppState {
@@ -89,7 +103,15 @@ impl AppState {
             Vec::new()
         };
 
-        Self { projects, servers, data_path, server_path }
+        let snippet_path = data_dir.join("snippets.json");
+        let snippets = if snippet_path.exists() {
+            let data = fs::read_to_string(&snippet_path).unwrap_or_default();
+            serde_json::from_str(&data).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
+        Self { projects, servers, snippets, data_path, server_path, snippet_path }
     }
 
     fn save_projects(&self) -> Result<(), String> {
@@ -102,6 +124,12 @@ impl AppState {
         let data = serde_json::to_string_pretty(&self.servers)
             .map_err(|e| e.to_string())?;
         fs::write(&self.server_path, data).map_err(|e| e.to_string())
+    }
+
+    fn save_snippets(&self) -> Result<(), String> {
+        let data = serde_json::to_string_pretty(&self.snippets)
+            .map_err(|e| e.to_string())?;
+        fs::write(&self.snippet_path, data).map_err(|e| e.to_string())
     }
 }
 
@@ -410,6 +438,37 @@ fn delete_server(state: State<Mutex<AppState>>, id: String) -> Result<(), String
     state.servers.retain(|s| s.id != id);
     state.save_servers()?;
     Ok(())
+}
+
+#[tauri::command]
+fn get_snippets(state: State<Mutex<AppState>>) -> Result<Vec<Snippet>, String> {
+    let state = state.lock().map_err(|e| e.to_string())?;
+    Ok(state.snippets.clone())
+}
+
+/// 整表保存（前端管理增删改后回写）。给缺 id / created_at 的项补齐。
+#[tauri::command]
+fn save_snippets(
+    state: State<Mutex<AppState>>,
+    snippets: Vec<Snippet>,
+) -> Result<Vec<Snippet>, String> {
+    let mut state = state.lock().map_err(|e| e.to_string())?;
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let snippets: Vec<Snippet> = snippets
+        .into_iter()
+        .map(|mut s| {
+            if s.id.is_empty() {
+                s.id = Uuid::new_v4().to_string();
+            }
+            if s.created_at.is_empty() {
+                s.created_at = now.clone();
+            }
+            s
+        })
+        .collect();
+    state.snippets = snippets.clone();
+    state.save_snippets()?;
+    Ok(snippets)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1267,6 +1326,8 @@ pub fn run() {
             terminal_remote_info,
             notify,
             git_status_batch,
+            get_snippets,
+            save_snippets,
             claude_usage,
             get_auto_hello,
             set_auto_hello,

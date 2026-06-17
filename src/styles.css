@@ -1197,6 +1197,97 @@ body {
   color: var(--blue);
 }
 
+/* ===== Prompt 片段库 ===== */
+.snippet-menu {
+  position: fixed;
+  z-index: 1600;
+  width: 280px;
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--bg-0);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  display: none;
+}
+.snippet-menu.active { display: block; }
+.snippet-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.snippet-item:hover { background: var(--blue-bg); }
+.snippet-item-title { font-size: 13px; color: var(--text-1); font-weight: 500; }
+.snippet-item:hover .snippet-item-title { color: var(--blue); }
+.snippet-item-preview {
+  font-size: 11.5px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.snippet-menu-empty { padding: 14px 10px; font-size: 12.5px; color: var(--text-3); text-align: center; }
+.snippet-menu-sep { height: 1px; margin: 4px 6px; background: var(--border); }
+.snippet-item-manage {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-2);
+}
+.snippet-item-manage svg { width: 15px; height: 15px; }
+.snippet-item-manage span { font-size: 13px; }
+
+/* 片段管理 Modal */
+.snippet-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-1, var(--bg-2));
+  margin-bottom: 14px;
+}
+.snippet-editor textarea {
+  resize: vertical;
+  min-height: 76px;
+  font-family: "JetBrains Mono", Menlo, monospace;
+  line-height: 1.5;
+}
+.snippet-editor-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.snippet-edit-hint { flex: 1; font-size: 12px; color: var(--orange); }
+.snippet-list { display: flex; flex-direction: column; gap: 8px; }
+.snippet-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  transition: border-color 0.12s;
+}
+.snippet-row:hover { border-color: var(--border-hover); }
+.snippet-row-main { flex: 1; min-width: 0; }
+.snippet-row-title { font-size: 14px; color: var(--text-1); font-weight: 500; }
+.snippet-row-preview {
+  font-size: 12px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 2px;
+}
+.snippet-row-actions { display: flex; gap: 4px; flex-shrink: 0; }
+
 /* 文件树拖拽到终端时跟随光标的标签 */
 .tree-drag-ghost {
   position: fixed;
