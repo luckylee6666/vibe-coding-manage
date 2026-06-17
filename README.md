@@ -12,6 +12,9 @@ A desktop app for managing your Vibe Coding projects, built with Tauri v2.
 - **Grouping** — group projects, collapsible sidebar, click to locate, rename a group inline (hover → pencil; all projects in it move together)
 - **Built-in terminal** — in-app bottom-drawer tabbed terminal managing all sessions; file tree, file preview, color themes, font size, drag-to-insert path; closing a tab asks first and reminds you to let the AI update its memory (see [Using the terminal](#using-the-built-in-terminal))
 - **Multi AI CLI launch** — start **Claude / Codex / opencode / Gemini / agy** in a project directory from the project card, with a tool badge on the tab
+- **Session attention awareness** — when a terminal session goes quiet after a burst of output (an AI CLI likely finished or is waiting for input), you get a desktop notification + chime + an amber pulsing dot on the tab; the session you're actively watching won't interrupt you, and a bell icon in the toolbar toggles it
+- **Git status badges** — local project cards show the current branch, working-tree changes (● tracked / + untracked), and ahead/behind vs upstream (↑/↓), or a green ✓ when clean; scanned in the background, refreshed on launch and window focus
+- **Session restore** — the terminal remembers your tab layout (dir + CLI per tab) and offers to restore it on next launch; Claude tabs come back with `--continue`
 - **Scan & import** — batch-import git projects from a directory (auto-reads remote, dedups by path)
 - **Search** — quickly filter by name, path, description
 - **Export** — export project data to Excel

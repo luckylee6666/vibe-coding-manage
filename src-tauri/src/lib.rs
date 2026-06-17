@@ -1,10 +1,12 @@
 use base64::Engine;
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
 
@@ -644,18 +646,200 @@ fn trash_path(path: String) -> Result<(), String> {
     trash::delete(p).map_err(|e| e.to_string())
 }
 
+// ========== 项目 Git 状态徽标 ==========
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GitStatus {
+    path: String,
+    /// 是否是 git 仓库
+    is_repo: bool,
+    /// 当前分支名（detached 时为 "(detached)"）
+    branch: String,
+    /// 相对上游领先 / 落后的提交数
+    ahead: u32,
+    behind: u32,
+    /// 已追踪文件的改动数（暂存 + 未暂存 + 冲突）
+    changed: u32,
+    /// 未追踪文件数
+    untracked: u32,
+    /// 工作区是否有改动
+    dirty: bool,
+    /// 执行 git 出错（如 git 不在 PATH）
+    error: bool,
+}
+
+impl GitStatus {
+    fn empty(path: String) -> Self {
+        GitStatus {
+            path,
+            is_repo: false,
+            branch: String::new(),
+            ahead: 0,
+            behind: 0,
+            changed: 0,
+            untracked: 0,
+            dirty: false,
+            error: false,
+        }
+    }
+}
+
+/// 扫描单个仓库的 git 状态。用 `status --porcelain=v2 --branch` 一条命令拿全：
+/// 分支 / 上游领先落后 / 各文件状态。非仓库直接返回 is_repo=false。
+fn git_status_one(path: &str) -> GitStatus {
+    let mut st = GitStatus::empty(path.to_string());
+    let p = std::path::Path::new(path);
+    if !p.is_dir() || !p.join(".git").exists() {
+        return st;
+    }
+    st.is_repo = true;
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(["status", "--porcelain=v2", "--branch"])
+        .output();
+    let out = match out {
+        Ok(o) if o.status.success() => o,
+        _ => {
+            st.error = true;
+            return st;
+        }
+    };
+    let text = String::from_utf8_lossy(&out.stdout);
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("# branch.head ") {
+            st.branch = rest.trim().to_string();
+        } else if let Some(rest) = line.strip_prefix("# branch.ab ") {
+            for tok in rest.split_whitespace() {
+                if let Some(n) = tok.strip_prefix('+') {
+                    st.ahead = n.parse().unwrap_or(0);
+                } else if let Some(n) = tok.strip_prefix('-') {
+                    st.behind = n.parse().unwrap_or(0);
+                }
+            }
+        } else if line.starts_with("1 ") || line.starts_with("2 ") || line.starts_with("u ") {
+            st.changed += 1;
+        } else if line.starts_with("? ") {
+            st.untracked += 1;
+        }
+    }
+    st.dirty = st.changed > 0 || st.untracked > 0;
+    st
+}
+
+/// 批量扫描多个项目路径的 git 状态（并行，每仓库一线程）。
+/// git status 单仓库很快，整体在 spawn_blocking 里跑，绝不阻塞主线程。
+#[tauri::command]
+async fn git_status_batch(paths: Vec<String>) -> Result<Vec<GitStatus>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let handles: Vec<_> = paths
+            .into_iter()
+            .map(|path| std::thread::spawn(move || git_status_one(&path)))
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| {
+                h.join().unwrap_or_else(|_| {
+                    let mut s = GitStatus::empty(String::new());
+                    s.error = true;
+                    s
+                })
+            })
+            .collect()
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
 // ========== 内置终端（PTY）==========
+
+// ===== 会话状态感知（"AI 跑完/在等你"检测）=====
+// 思路：reader 线程记录每会话的输出活动；监控线程每秒扫描——
+// 一个会话"活跃输出了一阵后突然安静超过阈值"即判定为需要用户关注，emit `terminal-attention`。
+// 启发式过滤掉空 shell 打印提示符这类"瞬时单次输出"（不是干活），只在持续输出后变静默才报。
+
+/// 静默多久判定为"等待关注"
+const ATTENTION_IDLE_SECS: u64 = 5;
+/// 活跃输出至少持续这么久（毫秒）才算"干过活"——过滤瞬时提示符
+const ATTENTION_MIN_BURST_MS: u128 = 1500;
+/// 或：单段输出累计这么多字节也算干过活（捕捉一次性大输出，如构建日志/长回答）
+const ATTENTION_MIN_BYTES: usize = 2000;
+
+/// 单个会话的输出活动追踪。
+struct Activity {
+    /// 最近一次产生输出的时刻
+    last_output: Instant,
+    /// 当前这段活跃输出的起点（busy 由 false→true 时重置）
+    burst_start: Instant,
+    /// 当前活跃段累计字节
+    burst_bytes: usize,
+    /// 自上次通知后是否有新输出（true = 有待消费的活跃）
+    busy: bool,
+    /// 本段活跃是否已通知过（避免重复报）
+    notified: bool,
+    name: String,
+    tool: String,
+}
+
+/// 推给前端的"需要关注"事件。
+#[derive(Clone, Serialize)]
+struct AttentionEvent {
+    id: String,
+    name: String,
+    tool: String,
+}
+
+type ActivityMap = Arc<Mutex<HashMap<String, Activity>>>;
 
 /// 终端状态：持有共享的 RemoteHub（会话表 / 滚动缓存 / 广播通道 / PIN）。
 /// 桌面命令与内嵌的手机端服务都操作同一个 hub（克隆即共享 Arc）。
 struct TerminalState {
     hub: RemoteHub,
+    /// 各会话输出活动追踪（reader 线程写、监控线程读）
+    activity: ActivityMap,
 }
 
 impl Default for TerminalState {
     fn default() -> Self {
         Self {
             hub: RemoteHub::new(REMOTE_PORT),
+            activity: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+}
+
+/// 监控线程：每秒扫描所有会话，把"活跃后静默超阈值"的会话报给前端。
+fn monitor_attention(app: AppHandle, activity: ActivityMap) {
+    let idle = Duration::from_secs(ATTENTION_IDLE_SECS);
+    loop {
+        std::thread::sleep(Duration::from_millis(1000));
+        let mut fire: Vec<AttentionEvent> = Vec::new();
+        if let Ok(mut map) = activity.lock() {
+            let now = Instant::now();
+            for (id, a) in map.iter_mut() {
+                if !a.busy || a.notified {
+                    continue;
+                }
+                if now.duration_since(a.last_output) < idle {
+                    continue;
+                }
+                let burst_ms = a.last_output.duration_since(a.burst_start).as_millis();
+                let qualifies = burst_ms >= ATTENTION_MIN_BURST_MS || a.burst_bytes >= ATTENTION_MIN_BYTES;
+                // 不管够不够格，这段活跃都已结束 → 消费掉，等下一段新输出再重新计
+                a.busy = false;
+                if qualifies {
+                    a.notified = true;
+                    fire.push(AttentionEvent {
+                        id: id.clone(),
+                        name: a.name.clone(),
+                        tool: a.tool.clone(),
+                    });
+                }
+            }
+        }
+        for ev in fire {
+            let _ = app.emit("terminal-attention", ev);
         }
     }
 }
@@ -732,9 +916,34 @@ fn terminal_create(
     let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
 
     // 后台线程持续读 PTY 输出：base64 后同时推给桌面窗口（Tauri 事件）和手机端（WS 广播 + 滚动缓存）
+    let sess_name = name.unwrap_or_else(|| id.clone());
+    let sess_tool = tool.unwrap_or_default();
+
+    // 登记活动追踪条目（监控线程据此判定"等待关注"）
+    {
+        let now = Instant::now();
+        state
+            .activity
+            .lock()
+            .map_err(|e| e.to_string())?
+            .insert(
+                id.clone(),
+                Activity {
+                    last_output: now,
+                    burst_start: now,
+                    burst_bytes: 0,
+                    busy: false,
+                    notified: false,
+                    name: sess_name.clone(),
+                    tool: sess_tool.clone(),
+                },
+            );
+    }
+
     let app_evt = app.clone();
     let sid = id.clone();
     let hub_evt = state.hub.clone();
+    let act_evt = state.activity.clone();
     std::thread::spawn(move || {
         let mut buf = [0u8; 8192];
         loop {
@@ -752,12 +961,29 @@ fn terminal_create(
                         },
                     );
                     hub_evt.publish(&sid, chunk, data);
+                    // 记录输出活动：新一段活跃则重置起点；持续输出则累加
+                    if let Ok(mut map) = act_evt.lock() {
+                        if let Some(a) = map.get_mut(&sid) {
+                            let now = Instant::now();
+                            if !a.busy {
+                                a.burst_start = now;
+                                a.burst_bytes = 0;
+                            }
+                            a.busy = true;
+                            a.notified = false;
+                            a.last_output = now;
+                            a.burst_bytes += n;
+                        }
+                    }
                 }
                 Err(_) => break,
             }
         }
         let _ = app_evt.emit("terminal-exit", &sid);
         hub_evt.mark_exit(&sid);
+        if let Ok(mut map) = act_evt.lock() {
+            map.remove(&sid);
+        }
     });
 
     // 注册会话元信息（供手机端列表展示）
@@ -765,8 +991,8 @@ fn terminal_create(
         id.clone(),
         SessionMeta {
             id: id.clone(),
-            name: name.unwrap_or_else(|| id.clone()),
-            tool: tool.unwrap_or_default(),
+            name: sess_name,
+            tool: sess_tool,
         },
     );
 
@@ -829,7 +1055,23 @@ fn terminal_close(state: State<TerminalState>, id: String) -> Result<(), String>
     if let Some(mut session) = state.hub.cleanup_session(&id) {
         let _ = session.child.kill();
     }
+    if let Ok(mut map) = state.activity.lock() {
+        map.remove(&id);
+    }
     Ok(())
+}
+
+/// 发系统级桌面通知（"会话状态感知"用：AI 跑完/在等你时叫回用户）。
+/// 由前端在判定窗口失焦/不在当前标签时调用，避免你正盯着看还弹通知。
+#[tauri::command]
+fn notify(app: AppHandle, title: String, body: String) -> Result<(), String> {
+    use tauri_plugin_notification::NotificationExt;
+    app.notification()
+        .builder()
+        .title(title)
+        .body(body)
+        .show()
+        .map_err(|e| e.to_string())
 }
 
 /// 把一个 IPv4 分类为「局域网」/「其他」；返回 None 表示该地址不适合展示
@@ -969,16 +1211,22 @@ async fn claude_hello_now() -> Result<String, String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let state = Mutex::new(AppState::new());
-    
+    let term_state = TerminalState::default();
+    let activity_for_monitor = term_state.activity.clone();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(state)
-        .manage(TerminalState::default())
+        .manage(term_state)
         .manage(usage::UsageState::load())
-        .setup(|app| {
+        .setup(move |app| {
             // 后台轮询：自动 hello 开启时，5h 窗口重置后自动触发开新窗口
             let usage_app = app.handle().clone();
             std::thread::spawn(move || usage::poller(usage_app));
+            // 会话状态感知：监控线程扫描"活跃后静默"的终端，emit terminal-attention
+            let mon_app = app.handle().clone();
+            std::thread::spawn(move || monitor_attention(mon_app, activity_for_monitor));
             // 版本号显示在原生标题栏（来自 Cargo.toml，单一来源）
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.set_title(&format!(
@@ -1017,6 +1265,8 @@ pub fn run() {
             terminal_resize,
             terminal_close,
             terminal_remote_info,
+            notify,
+            git_status_batch,
             claude_usage,
             get_auto_hello,
             set_auto_hello,

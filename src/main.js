@@ -83,6 +83,7 @@ async function init() {
   await load();
   bind();
   bindUsageEvents();
+  maybeRestoreSessions();
 }
 
 // 自动 hello / 用量后台事件（与终端是否打开无关，启动即监听）
@@ -303,6 +304,7 @@ function render(list) {
           <div class="card-tags">
             <span class="tag ${tagCls(p.machine)}">${tagLabel(p.machine)}</span>
             ${p.machine === 'server' && p.serverId ? `<span class="tag tag-server">${esc(getServerName(p.serverId))}</span>` : ''}
+            <span class="card-git" data-git-id="${p.id}"></span>
           </div>
         </div>
         <div class="card-actions">
@@ -331,6 +333,44 @@ function render(list) {
     card.querySelector('.edit-btn').onclick = () => openModal(p);
     card.querySelector('.del-btn').onclick = () => del(p.id, p.name);
   });
+
+  refreshGitStatus();
+}
+
+// ===== 项目卡片 Git 状态徽标 =====
+function gitBadgeHtml(r) {
+  if (!r || !r.isRepo || r.error) return '';
+  const branchIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="6" r="2.2"/><circle cx="6" cy="18" r="2.2"/><circle cx="18" cy="7.5" r="2.2"/><path d="M6 8.2v7.6M18 9.7c0 4-3.5 3.3-6 5.3"/></svg>';
+  let metrics = '';
+  if (r.changed) metrics += `<span class="git-m git-changed" title="已改动（含暂存）文件">●${r.changed}</span>`;
+  if (r.untracked) metrics += `<span class="git-m git-untracked" title="未追踪文件">+${r.untracked}</span>`;
+  if (r.ahead) metrics += `<span class="git-m git-ahead" title="领先上游提交">↑${r.ahead}</span>`;
+  if (r.behind) metrics += `<span class="git-m git-behind" title="落后上游提交">↓${r.behind}</span>`;
+  if (!r.dirty && !r.ahead && !r.behind) metrics = '<span class="git-m git-ok" title="干净，与上游同步">✓</span>';
+  return `<span class="git-badge ${r.dirty ? 'is-dirty' : 'is-clean'}">`
+    + `<span class="git-branch" title="当前分支：${esc(r.branch)}">${branchIcon}${esc(r.branch || '?')}</span>`
+    + metrics + '</span>';
+}
+
+let gitRefreshing = false;
+async function refreshGitStatus() {
+  if (gitRefreshing) return;
+  const spans = [...document.querySelectorAll('.card-git[data-git-id]')];
+  const items = spans.map(s => {
+    const p = projects.find(x => x.id === s.dataset.gitId);
+    return p && p.localPath && p.machine !== 'server' ? { span: s, path: p.localPath } : null;
+  }).filter(Boolean);
+  if (!items.length) return;
+  gitRefreshing = true;
+  try {
+    const results = await invoke('git_status_batch', { paths: items.map(i => i.path) });
+    const byPath = new Map(results.map(r => [r.path, r]));
+    items.forEach(i => { i.span.innerHTML = gitBadgeHtml(byPath.get(i.path)); });
+  } catch (e) {
+    /* git 不可用就不显示徽标 */
+  } finally {
+    gitRefreshing = false;
+  }
 }
 
 function bind() {
@@ -421,6 +461,15 @@ function bind() {
   termEl.collapseBtn.onclick = collapseDock;
   termEl.maximizeBtn.onclick = toggleDockMaximize;
   termEl.newBtn.onclick = () => createSession({});
+  termEl.bellBtn.onclick = toggleNotify;
+  applyBellState();
+  // 窗口重新获得焦点时，正在看的会话就别再亮"需要关注"了 + 刷新 git 状态
+  let gitFocusTimer = null;
+  window.addEventListener('focus', () => {
+    if (activeSession && termEl.dock.classList.contains('active')) clearAttention(activeSession);
+    clearTimeout(gitFocusTimer);
+    gitFocusTimer = setTimeout(refreshGitStatus, 400); // 防抖：回到窗口稍候再扫
+  });
   termEl.usageBtn.onclick = openUsage;
   $('usage-close').onclick = closeUsage;
   $('usage-ok').onclick = closeUsage;
@@ -1202,6 +1251,7 @@ const termEl = {
   newBtn: $('terminal-new-btn'),
   treeBtn: $('terminal-tree-btn'),
   usageBtn: $('terminal-usage-btn'),
+  bellBtn: $('terminal-bell-btn'),
   themeBtn: $('terminal-theme-btn'),
   themeMenu: $('terminal-theme-menu'),
   maximizeBtn: $('terminal-maximize-btn'),
@@ -1254,10 +1304,100 @@ const TERM_FONT_MIN = 8, TERM_FONT_MAX = 32, TERM_FONT_DEFAULT = 13;
 let currentFontSize = parseInt(localStorage.getItem('term-fontsize'), 10) || TERM_FONT_DEFAULT;
 if (currentFontSize < TERM_FONT_MIN || currentFontSize > TERM_FONT_MAX) currentFontSize = TERM_FONT_DEFAULT;
 
-const sessions = new Map(); // id -> { term, fit, tabEl, bodyEl, name, status }
+const sessions = new Map(); // id -> { term, fit, tabEl, bodyEl, name, status, attention }
 let activeSession = null;
 let termSeq = 0;
 let termEventsBound = false;
+
+// ===== 会话状态感知：AI 跑完/在等你时提醒 =====
+let notifyEnabled = localStorage.getItem('term-notify') !== '0'; // 默认开
+function applyBellState() {
+  termEl.bellBtn.classList.toggle('active', notifyEnabled);
+  termEl.bellBtn.title = notifyEnabled
+    ? '会话提醒：开（AI 跑完/在等你时通知，点击关闭）'
+    : '会话提醒：关（点击开启）';
+}
+function toggleNotify() {
+  notifyEnabled = !notifyEnabled;
+  localStorage.setItem('term-notify', notifyEnabled ? '1' : '0');
+  applyBellState();
+  msg(notifyEnabled ? '会话提醒已开启' : '会话提醒已关闭', notifyEnabled ? 'success' : 'info');
+}
+// 提示音（Web Audio，无需权限）
+let audioCtx = null;
+function beep() {
+  try {
+    const AC = window.AudioContext || /** @type {any} */ (window).webkitAudioContext;
+    audioCtx = audioCtx || new AC();
+    const t = audioCtx.currentTime;
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.connect(g); g.connect(audioCtx.destination);
+    o.type = 'sine'; o.frequency.setValueAtTime(880, t);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.18, t + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.3);
+    o.start(t); o.stop(t + 0.32);
+  } catch (_) {}
+}
+// 是否该弹系统通知：开关开 且 用户没在盯着这个会话看（在看就别打扰）
+function shouldNotify(id) {
+  if (!notifyEnabled) return false;
+  const focusedOnIt = document.hasFocus()
+    && termEl.dock.classList.contains('active')
+    && activeSession === id;
+  return !focusedOnIt;
+}
+function markAttention(id) {
+  const s = sessions.get(id);
+  if (!s) return;
+  s.attention = true;
+  s.tabEl.classList.add('attention');
+  updateFabBadge();
+}
+function clearAttention(id) {
+  const s = sessions.get(id);
+  if (!s || !s.attention) return;
+  s.attention = false;
+  s.tabEl.classList.remove('attention');
+  updateFabBadge();
+}
+
+// ===== 会话恢复：记住上次的终端标签布局，重开应用一键还原 =====
+// PTY 进程随应用退出无法真正续命，恢复的是"布局"——同目录、同 CLI 重新拉起；
+// Claude 标签用 --continue 接上次对话。
+function persistSessionLayout() {
+  const layout = [];
+  sessions.forEach(s => layout.push({ cwd: s.cwd || '', name: s.name || '', autoCmd: s.tool || '' }));
+  try { localStorage.setItem('term-session-layout', JSON.stringify(layout)); } catch (_) {}
+}
+function maybeRestoreSessions() {
+  let layout;
+  try { layout = JSON.parse(localStorage.getItem('term-session-layout') || '[]'); } catch (_) { layout = []; }
+  if (!Array.isArray(layout) || !layout.length) return;
+  // 问一次就把记录清掉：恢复会重新落盘最新布局，取消则不再纠缠
+  localStorage.removeItem('term-session-layout');
+  const cmds = layout.filter(it => it.autoCmd).map(it => it.autoCmd.trim().split(/\s+/)[0]);
+  const hasClaude = cmds.includes('claude');
+  showConfirm({
+    title: '恢复终端会话',
+    message: `上次有 ${layout.length} 个终端会话，要恢复吗？\n同目录重新拉起对应 CLI。${hasClaude ? '\nClaude 标签会用 --continue 接上次对话。' : ''}`,
+    confirmText: '恢复',
+    danger: false,
+    onConfirm: () => restoreSessions(layout),
+  });
+}
+async function restoreSessions(layout) {
+  for (const it of layout) {
+    let cmd = (it.autoCmd || '').trim();
+    const first = cmd.split(/\s+/)[0];
+    // claude 接上次对话；已带 continue/resume 就不重复加
+    if (first === 'claude' && !/(^|\s)(--continue|--resume|-c)(\s|$)/.test(cmd)) {
+      cmd = cmd + ' --continue';
+    }
+    try { await createSession({ cwd: it.cwd, name: it.name, autoCmd: cmd }); } catch (_) {}
+  }
+}
 
 function b64ToBytes(b64) {
   const bin = atob(b64);
@@ -1272,7 +1412,10 @@ async function bindTermEvents() {
   const listen = window.__TAURI__.event.listen;
   await listen('terminal-output', e => {
     const s = sessions.get(e.payload.id);
-    if (s) s.term.write(b64ToBytes(e.payload.data));
+    if (s) {
+      s.term.write(b64ToBytes(e.payload.data));
+      if (s.attention) clearAttention(e.payload.id); // 又有新输出 = 重新在干活，撤掉提醒
+    }
   });
   await listen('terminal-exit', e => {
     const s = sessions.get(e.payload);
@@ -1280,6 +1423,23 @@ async function bindTermEvents() {
       s.status = 'exited';
       s.tabEl.classList.add('exited');
       s.term.write('\r\n\x1b[90m[会话已结束]\x1b[0m\r\n');
+      if (shouldNotify(e.payload)) {
+        beep();
+        invoke('notify', { title: `${s.name || '终端'} 已结束`, body: '终端会话已退出' }).catch(() => {});
+      }
+    }
+  });
+  // 会话状态感知：某会话活跃后静默 → AI 可能跑完/在等你输入
+  await listen('terminal-attention', e => {
+    const { id, name, tool } = e.payload || {};
+    const s = sessions.get(id);
+    if (!s || s.status === 'exited') return;
+    markAttention(id);
+    if (shouldNotify(id)) {
+      beep();
+      const label = name || s.name || '终端';
+      const what = tool ? `${tool} 可能跑完了，或在等你输入` : '命令已结束，或在等你输入';
+      invoke('notify', { title: `${label} 需要关注`, body: what }).catch(() => {});
     }
   });
 
@@ -1798,6 +1958,9 @@ function updateFabBadge() {
   const n = sessions.size;
   termEl.fabBadge.style.display = n ? '' : 'none';
   termEl.fabBadge.textContent = n;
+  let att = 0;
+  sessions.forEach(s => { if (s.attention) att++; });
+  termEl.fab.classList.toggle('attention', att > 0);
 }
 
 function fitSession(id) {
@@ -1823,6 +1986,7 @@ function activateSession(id) {
   if (rootChanged) renderTree(s.cwd);
   fitSession(id);
   s.term.focus();
+  clearAttention(id);
 }
 
 // 关闭终端前确认（提醒先让 AI 更新记忆）
@@ -1857,6 +2021,7 @@ async function closeSession(id) {
     else collapseDock();
   }
   updateFabBadge();
+  persistSessionLayout();
 }
 
 async function createSession({ cwd = '', name = '', autoCmd = '' }) {
@@ -1916,6 +2081,7 @@ async function createSession({ cwd = '', name = '', autoCmd = '' }) {
   activateSession(id);
   requestAnimationFrame(() => fitSession(id));
   updateFabBadge();
+  persistSessionLayout();
 
   try {
     // tool 只传工具名（命令首词，如 claude），不传整条命令——手机端用作标签/图标

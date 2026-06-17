@@ -556,7 +556,43 @@ body {
 .card-tags {
   display: flex;
   gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
 }
+
+/* ===== 项目 Git 状态徽标 ===== */
+.card-git { display: inline-flex; }
+.card-git:empty { display: none; }
+.git-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 8px;
+  font-size: 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-2, rgba(127, 127, 127, 0.06));
+  font-family: "JetBrains Mono", Menlo, monospace;
+}
+.git-branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-2);
+}
+.git-branch svg { width: 13px; height: 13px; flex-shrink: 0; }
+.git-badge.is-dirty .git-branch { color: var(--orange); }
+.git-m { font-weight: 600; line-height: 1; }
+.git-changed { color: var(--orange); }
+.git-untracked { color: var(--text-3); }
+.git-ahead { color: var(--blue); }
+.git-behind { color: var(--red); }
+.git-ok { color: var(--green); }
 
 .tag {
   display: inline-flex;
@@ -1358,6 +1394,24 @@ body {
   box-shadow: none;
 }
 
+/* 会话状态感知：需要关注（AI 跑完/在等你） */
+.term-tab.attention {
+  color: #ffd591;
+  background: rgba(250, 173, 20, 0.1);
+}
+.term-tab.attention .term-tab-dot {
+  background: #faad14;
+  box-shadow: 0 0 8px rgba(250, 173, 20, 0.9);
+  animation: term-attention-pulse 1.1s ease-in-out infinite;
+}
+.term-tab.attention.active {
+  box-shadow: inset 0 2px 0 #faad14;
+}
+@keyframes term-attention-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(1.45); }
+}
+
 .term-tab-name {
   flex: 1;
   overflow: hidden;
@@ -1992,6 +2046,17 @@ body {
   line-height: 18px;
   text-align: center;
   box-shadow: 0 0 0 2px #fff;
+}
+
+/* 收起状态下，有会话需要关注时整个悬浮按钮变琥珀色并呼吸 */
+.terminal-fab.attention {
+  background: linear-gradient(135deg, #faad14, #d48806);
+  box-shadow: 0 6px 18px rgba(250, 173, 20, 0.5);
+  animation: term-fab-pulse 1.4s ease-in-out infinite;
+}
+@keyframes term-fab-pulse {
+  0%, 100% { box-shadow: 0 6px 18px rgba(250, 173, 20, 0.45); }
+  50% { box-shadow: 0 6px 26px rgba(250, 173, 20, 0.9); }
 }
 
 /* ===== 手机远程 Modal ===== */
