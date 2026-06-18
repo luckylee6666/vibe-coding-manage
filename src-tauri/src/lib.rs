@@ -7,6 +7,8 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
 
@@ -959,6 +961,110 @@ async fn project_context(path: String) -> Result<ProjectContext, String> {
     .map_err(|e| e.to_string())
 }
 
+// ========== 终端会话上下文用量（Claude 会话当前上下文占比）==========
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ContextUsage {
+    /// 是否找到该项目的 Claude 会话 transcript
+    ok: bool,
+    /// 当前上下文占比 0-100
+    percent: u32,
+    /// 当前上下文 token 数（input + cache_read + cache_creation）
+    tokens: u64,
+    /// 模型上下文上限
+    limit: u64,
+}
+
+/// Claude Code 把项目路径编码成 ~/.claude/projects 下的目录名：`/` 和 `.` 都替换为 `-`。
+fn encode_claude_project_dir(cwd: &str) -> String {
+    cwd.chars()
+        .map(|c| if c == '/' || c == '.' { '-' } else { c })
+        .collect()
+}
+
+/// 找某项目对应的 Claude transcript 目录：先按编码规则猜，猜不中再扫 projects 下
+/// 各目录、读首行的 `cwd` 字段匹配。
+fn find_claude_project_dir(cwd: &str) -> Option<PathBuf> {
+    let projects = dirs::home_dir()?.join(".claude").join("projects");
+    let cand = projects.join(encode_claude_project_dir(cwd));
+    if cand.is_dir() {
+        return Some(cand);
+    }
+    for entry in fs::read_dir(&projects).ok()?.flatten() {
+        let p = entry.path();
+        if !p.is_dir() {
+            continue;
+        }
+        // 读该目录任一 jsonl 的首行，比对 cwd 字段
+        if let Some(j) = newest_jsonl(&p) {
+            if let Ok(content) = fs::read_to_string(&j) {
+                if let Some(line) = content.lines().next() {
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
+                        if v.get("cwd").and_then(|x| x.as_str()) == Some(cwd) {
+                            return Some(p);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn newest_jsonl(dir: &std::path::Path) -> Option<PathBuf> {
+    let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
+    for entry in fs::read_dir(dir).ok()?.flatten() {
+        let p = entry.path();
+        if p.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+            continue;
+        }
+        let mtime = entry.metadata().and_then(|m| m.modified()).ok()?;
+        if best.as_ref().map(|(t, _)| mtime > *t).unwrap_or(true) {
+            best = Some((mtime, p));
+        }
+    }
+    best.map(|(_, p)| p)
+}
+
+/// 估算某项目最近 Claude 会话的当前上下文占比。读最新 transcript 的最后一条带 usage
+/// 的 assistant 消息：context ≈ input + cache_read + cache_creation tokens。
+#[tauri::command]
+async fn context_usage(cwd: String) -> Result<ContextUsage, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut cu = ContextUsage { ok: false, percent: 0, tokens: 0, limit: 200_000 };
+        let Some(dir) = find_claude_project_dir(&cwd) else { return cu };
+        let Some(jsonl) = newest_jsonl(&dir) else { return cu };
+        let Ok(content) = fs::read_to_string(&jsonl) else { return cu };
+        // 从后往前找最后一条带 usage 的 assistant 消息
+        for line in content.lines().rev() {
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+            let Some(usage) = v.pointer("/message/usage") else { continue };
+            let g = |k: &str| usage.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
+            let tokens = g("input_tokens")
+                + g("cache_read_input_tokens")
+                + g("cache_creation_input_tokens");
+            if tokens == 0 {
+                continue;
+            }
+            let model = v
+                .pointer("/message/model")
+                .and_then(|x| x.as_str())
+                .unwrap_or("");
+            // 1M 上下文模型（id 带 [1m]）上限 1,000,000，否则 200,000
+            let limit: u64 = if model.contains("[1m]") { 1_000_000 } else { 200_000 };
+            cu.ok = true;
+            cu.tokens = tokens;
+            cu.limit = limit;
+            cu.percent = ((tokens as f64 / limit as f64) * 100.0).round().min(100.0) as u32;
+            break;
+        }
+        cu
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
 // ========== 内置终端（PTY）==========
 
 // ===== 会话状态感知（"AI 跑完/在等你"检测）=====
@@ -1415,6 +1521,23 @@ async fn oauth_usage() -> Result<usage::OAuthUsage, String> {
         .map_err(|e| e.to_string())
 }
 
+/// 刷新菜单栏托盘标题为「5h X% · 周 Y%」（OAuth 限流用量，走 60s 缓存）。
+fn update_tray_usage(app: &AppHandle) {
+    let u = usage::fetch_oauth_usage();
+    let title = if u.ok {
+        format!(
+            "5h {}% · 周 {}%",
+            u.five_hour.utilization.round() as i64,
+            u.seven_day.utilization.round() as i64
+        )
+    } else {
+        "用量 —".to_string()
+    };
+    if let Some(tray) = app.tray_by_id("usage-tray") {
+        let _ = tray.set_title(Some(&title));
+    }
+}
+
 /// 手动立刻发一次 hello（开新窗口 / 测试）。
 #[tauri::command]
 async fn claude_hello_now() -> Result<String, String> {
@@ -1449,6 +1572,44 @@ pub fn run() {
                     env!("CARGO_PKG_VERSION")
                 ));
             }
+            // 菜单栏托盘：常驻显示 5h / 周限流用量，菜单可打开主窗/刷新/退出
+            let show_i = MenuItem::with_id(app, "tray_show", "打开 Vibe Coding Manager", true, None::<&str>)?;
+            let refresh_i = MenuItem::with_id(app, "tray_refresh", "刷新用量", true, None::<&str>)?;
+            let quit_i = MenuItem::with_id(app, "tray_quit", "退出", true, None::<&str>)?;
+            let tray_menu = Menu::with_items(
+                app,
+                &[
+                    &show_i as &dyn tauri::menu::IsMenuItem<_>,
+                    &refresh_i,
+                    &quit_i,
+                ],
+            )?;
+            let mut tray_builder = TrayIconBuilder::with_id("usage-tray")
+                .menu(&tray_menu)
+                .show_menu_on_left_click(true)
+                .title("用量…")
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "tray_show" => {
+                        if let Some(w) = app.get_webview_window("main") {
+                            let _ = w.show();
+                            let _ = w.unminimize();
+                            let _ = w.set_focus();
+                        }
+                    }
+                    "tray_refresh" => update_tray_usage(app),
+                    "tray_quit" => app.exit(0),
+                    _ => {}
+                });
+            if let Some(icon) = app.default_window_icon().cloned() {
+                tray_builder = tray_builder.icon(icon);
+            }
+            tray_builder.build(app)?;
+            // 后台每 60s 刷新托盘标题（首次会触发钥匙串授权）
+            let tray_app = app.handle().clone();
+            std::thread::spawn(move || loop {
+                update_tray_usage(&tray_app);
+                std::thread::sleep(std::time::Duration::from_secs(60));
+            });
             // 手机端服务不在启动时常驻：PIN 随机化 + 端口监听都推迟到用户首次打开
             // 「手机远程」面板（terminal_remote_info → ensure_remote_started）。
             // 不用该功能就永远不对外暴露端口。
@@ -1483,6 +1644,7 @@ pub fn run() {
             notify,
             git_status_batch,
             project_context,
+            context_usage,
             get_snippets,
             save_snippets,
             claude_usage,

@@ -2299,6 +2299,32 @@ function updateFabBadge() {
   termEl.fab.classList.toggle('attention', att > 0);
 }
 
+// 终端标签上下文用量：claude 会话读自己项目的 transcript 估算当前上下文占比
+let ctxPollTimer = null;
+async function updateContextBadges() {
+  for (const [, s] of sessions) {
+    const tool = (s.tool || '').trim().split(/\s+/)[0];
+    const ctxEl = s.tabEl && s.tabEl.querySelector('.term-tab-ctx');
+    if (!ctxEl) continue;
+    if (tool !== 'claude' || !s.cwd) { ctxEl.style.display = 'none'; continue; }
+    try {
+      const c = await invoke('context_usage', { cwd: s.cwd });
+      if (c && c.ok) {
+        ctxEl.textContent = `ctx ${c.percent}%`;
+        ctxEl.title = `上下文 ${c.tokens.toLocaleString()} / ${c.limit.toLocaleString()} tokens`;
+        ctxEl.className = 'term-tab-ctx' + (c.percent >= 90 ? ' danger' : c.percent >= 70 ? ' warn' : '');
+        ctxEl.style.display = '';
+      } else {
+        ctxEl.style.display = 'none';
+      }
+    } catch (_) { ctxEl.style.display = 'none'; }
+  }
+}
+function ensureCtxPoll() {
+  if (ctxPollTimer) return;
+  ctxPollTimer = setInterval(updateContextBadges, 20000);
+}
+
 function fitSession(id) {
   const s = sessions.get(id);
   if (!s) return;
@@ -2380,6 +2406,7 @@ async function createSession({ cwd = '', name = '', autoCmd = '' }) {
     `<span class="term-tab-dot"></span>` +
     `<span class="term-tab-name" title="${esc(label)}">${esc(label)}</span>` +
     toolBadge +
+    `<span class="term-tab-ctx" style="display:none;" title="上下文用量"></span>` +
     `<span class="term-tab-close" title="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 18L18 6M6 6l12 12"/></svg></span>`;
   termEl.tabs.appendChild(tabEl);
   tabEl.onclick = (ev) => {
@@ -2418,6 +2445,11 @@ async function createSession({ cwd = '', name = '', autoCmd = '' }) {
   requestAnimationFrame(() => fitSession(id));
   updateFabBadge();
   persistSessionLayout();
+  ensureCtxPoll();
+  // claude 会话起来后稍等再首刷一次上下文徽标（等它写出 transcript）
+  if ((autoCmd || '').trim().split(/\s+/)[0] === 'claude') {
+    setTimeout(updateContextBadges, 6000);
+  }
 
   try {
     // tool 只传工具名（命令首词，如 claude），不传整条命令——手机端用作标签/图标
