@@ -79,7 +79,11 @@ impl UsageState {
     }
 }
 
-/// 经登录 shell 跑一条命令，继承用户 PATH（GUI 启动的进程默认拿不到 nvm/npx/claude）。
+/// 经「交互式登录」shell 跑一条命令，继承用户完整 PATH
+/// （GUI 启动的进程默认拿不到 nvm/npx/claude）。
+/// 必须是交互式（-i）：nvm 等对 PATH 的设置几乎都写在 .zshrc/.bashrc 里，
+/// 而这些 rc 只在交互式 shell 加载；只用 -l（登录非交互）只读 .zprofile/.zlogin，
+/// 拿不到 nvm 的 node/npx → ccusage 跑不起来。内置终端是真交互 PTY 所以一直正常。
 /// 带超时，避免 ccusage / claude 卡死拖住调用线程。
 fn run_shell(script: &str, timeout_secs: u64) -> Result<String, String> {
     let (tx, rx) = std::sync::mpsc::channel();
@@ -89,7 +93,7 @@ fn run_shell(script: &str, timeout_secs: u64) -> Result<String, String> {
         let out = {
             let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
             std::process::Command::new(shell)
-                .arg("-lc")
+                .arg("-ilc")
                 .arg(&script)
                 .output()
         };
@@ -118,8 +122,9 @@ fn run_shell(script: &str, timeout_secs: u64) -> Result<String, String> {
 /// 拉取当前 5 小时窗口用量。优先全局 `ccusage`，否则 `npx -y ccusage@latest`。
 pub fn fetch_usage() -> ClaudeUsage {
     // stderr 丢弃（npm 的 warn 不影响 stdout 的 JSON）
-    // 优先全局 ccusage；否则走 npx --prefer-offline 用本地缓存（不每次查 registry，省几秒）
-    let script = "ccusage blocks --json 2>/dev/null || npx -y --prefer-offline ccusage blocks --json 2>/dev/null";
+    // 优先全局 ccusage；否则 npx 拉 @latest。不用 --prefer-offline：缓存里的旧版可能缺
+    // darwin-arm64 原生依赖（报 "native binary is not available"），@latest 会装齐 optional deps。
+    let script = "ccusage blocks --json 2>/dev/null || npx -y ccusage@latest blocks --json 2>/dev/null";
     match run_shell(script, 60) {
         Ok(json) => match parse_blocks(&json) {
             Ok(mut u) => {
@@ -144,8 +149,17 @@ pub fn fetch_usage() -> ClaudeUsage {
     }
 }
 
+/// 从可能带 shell 启动噪声（交互式 zsh 的 .zshrc 偶尔往 stdout 打印 "Restored session:" 等）
+/// 的输出里截出 JSON 主体——从第一个 `{` 或 `[` 开始。
+fn slice_json(s: &str) -> &str {
+    match s.find(|c| c == '{' || c == '[') {
+        Some(i) => &s[i..],
+        None => s,
+    }
+}
+
 fn parse_blocks(json: &str) -> Result<ClaudeUsage, String> {
-    let v: Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    let v: Value = serde_json::from_str(slice_json(json)).map_err(|e| e.to_string())?;
     let blocks = v
         .get("blocks")
         .and_then(|b| b.as_array())
@@ -276,7 +290,7 @@ pub fn fetch_agent_weekly(agent: &str) -> AgentWeekly {
     };
     let sub = if agent == "codex" { "daily" } else { "weekly" };
     let script = format!(
-        "ccusage {agent} {sub} --json 2>/dev/null || npx -y --prefer-offline ccusage {agent} {sub} --json 2>/dev/null"
+        "ccusage {agent} {sub} --json 2>/dev/null || npx -y ccusage@latest {agent} {sub} --json 2>/dev/null"
     );
     match run_shell(&script, 90) {
         Ok(json) => match parse_agent_weekly(&json, agent) {
@@ -306,7 +320,7 @@ pub fn fetch_agent_weekly(agent: &str) -> AgentWeekly {
 }
 
 fn parse_agent_weekly(json: &str, agent: &str) -> Result<AgentWeekly, String> {
-    let v: Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    let v: Value = serde_json::from_str(slice_json(json)).map_err(|e| e.to_string())?;
     let totals = v.get("totals");
     let total_cost = totals.map(row_cost).unwrap_or(0.0);
     let total_tokens = totals.map(row_tokens).unwrap_or(0);
@@ -372,7 +386,15 @@ fn aggregate_daily_to_weeks(v: &Value) -> Result<Vec<WeekRow>, String> {
 pub fn fire_hello() -> Result<String, String> {
     // 进 HOME 跑，避免落在某个奇怪 cwd；输入接 /dev/null 防止它等输入
     let script = "cd \"$HOME\"; claude -p \"hello\" </dev/null 2>&1";
-    run_shell(script, 120)
+    run_shell(script, 120).map(|out| {
+        // 滤掉交互式 shell 启动噪声行（如 .zshrc 打印的 "Restored session:"）
+        out.lines()
+            .filter(|l| !l.trim_start().starts_with("Restored session"))
+            .collect::<Vec<_>>()
+            .join("\n")
+            .trim()
+            .to_string()
+    })
 }
 
 /// 后台轮询：推用量给前端 + 在窗口重置时自动 hello。
