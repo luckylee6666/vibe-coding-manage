@@ -976,6 +976,24 @@ struct ContextUsage {
     limit: u64,
 }
 
+/// 估算模型上下文窗口上限。
+/// 难点：transcript 里 model id 是裸的 `claude-opus-4-8`（不带 `[1m]` 后缀，1M beta 是
+/// Claude Code 通过请求头开的、不落盘），磁盘上无从确知窗口大小。
+/// 折中：Opus 4.x 是 1M 上下文型号、本工具用户基本是 Max → 默认 1M；其余 200k；
+/// 另外只要实测用量已超基准就抬到 1M 兜底。和 Claude Code /usage(claude-hud) 的口径对齐。
+fn context_limit_for(model: &str, tokens: u64) -> u64 {
+    let base = if model.contains("[1m]") || model.contains("opus-4") {
+        1_000_000
+    } else {
+        200_000
+    };
+    if tokens > base {
+        1_000_000
+    } else {
+        base
+    }
+}
+
 /// Claude Code 把项目路径编码成 ~/.claude/projects 下的目录名：`/` 和 `.` 都替换为 `-`。
 fn encode_claude_project_dir(cwd: &str) -> String {
     cwd.chars()
@@ -1051,8 +1069,7 @@ async fn context_usage(cwd: String) -> Result<ContextUsage, String> {
                 .pointer("/message/model")
                 .and_then(|x| x.as_str())
                 .unwrap_or("");
-            // 1M 上下文模型（id 带 [1m]）上限 1,000,000，否则 200,000
-            let limit: u64 = if model.contains("[1m]") { 1_000_000 } else { 200_000 };
+            let limit = context_limit_for(model, tokens);
             cu.ok = true;
             cu.tokens = tokens;
             cu.limit = limit;
