@@ -931,22 +931,35 @@ function switchUsageTab(agent) {
 async function loadUsage() {
   const agent = usageAgent;
   const body = $('usage-body');
-  body.innerHTML = '<div class="usage-loading">查询中…（首次走 npx 拉 ccusage，稍等）</div>';
   try {
     if (agent === 'claude') {
       lastClaudeWeekly = null;
-      const u = await invoke('claude_usage');
-      if (usageAgent !== 'claude') return;          // 用户已切走
-      renderUsage(u);
-      // 周用量异步补在窗口下方，不阻塞窗口展示
+      // 分两块：上方 OAuth 限流（快，缓存），下方 ccusage 花费（慢，后台补）
+      body.innerHTML =
+        '<div id="usage-oauth"><div class="usage-loading">查询限流用量…</div></div>' +
+        '<div id="usage-ccusage" style="margin-top:14px;"><div class="usage-loading">查询花费（ccusage，首次稍慢）…</div></div>';
+      // OAuth 限流：和 /usage 同源，秒出
+      invoke('oauth_usage').then(o => {
+        if (usageAgent === 'claude') renderOAuth(o);
+      }).catch(() => {});
+      // ccusage 花费窗口（不阻塞 OAuth 显示）
+      invoke('claude_usage').then(u => {
+        if (usageAgent === 'claude') renderUsage(u);
+      }).catch(e => {
+        const cc = document.getElementById('usage-ccusage');
+        if (cc && usageAgent === 'claude') cc.innerHTML = `<div class="usage-error">花费查询失败：${esc(String(e))}</div>`;
+      });
+      // 周用量异步补在最下方
       invoke('agent_weekly', { agent: 'claude' }).then(w => {
         if (usageAgent !== 'claude') return;
         lastClaudeWeekly = w;
+        const cc = document.getElementById('usage-ccusage');
         const existing = document.getElementById('usage-weekly-sec');
         if (existing) existing.outerHTML = renderWeeklyHTML(w, '周用量');
-        else body.insertAdjacentHTML('beforeend', renderWeeklyHTML(w, '周用量'));
+        else if (cc) cc.insertAdjacentHTML('beforeend', renderWeeklyHTML(w, '周用量'));
       }).catch(() => {});
     } else {
+      body.innerHTML = '<div class="usage-loading">查询中…（首次走 npx 拉 ccusage，稍等）</div>';
       stopUsageCountdown();
       const w = await invoke('agent_weekly', { agent });
       if (usageAgent !== agent) return;
@@ -958,10 +971,10 @@ async function loadUsage() {
   }
 }
 
-// Claude 5 小时窗口主视图（含下方周用量）。
+// Claude 5 小时窗口主视图（含下方周用量）。写入 #usage-ccusage 子容器（OAuth 限流在其上方）。
 function renderUsage(u) {
   if (usageAgent !== 'claude') return;
-  const body = $('usage-body');
+  const body = document.getElementById('usage-ccusage') || $('usage-body');
   const weekly = lastClaudeWeekly ? renderWeeklyHTML(lastClaudeWeekly, '周用量') : '';
   if (!u || !u.ok) {
     stopUsageCountdown();
@@ -1001,6 +1014,44 @@ function renderUsage(u) {
         `<span class="usage-models">${(u.models && u.models.length) ? u.models.map(m => `<b>${esc(shortModel(m))}</b>`).join('、') : '—'}</span></div>` +
     `</div>` + weekly;
   startUsageCountdown(startEpoch);
+}
+
+// OAuth 限流用量（Claude 专属，和 /usage 同源）：5h / 7d 使用百分比 + 重置倒计时。
+function renderOAuth(o) {
+  const el = document.getElementById('usage-oauth');
+  if (!el) return;
+  if (!o || !o.ok) {
+    el.innerHTML = `<div class="usage-error">${esc((o && o.error) || '限流用量查询失败')}</div>`;
+    return;
+  }
+  const plan = o.plan ? ` · ${esc(o.plan)}` : '';
+  const stale = o.stale ? ' <span class="usage-stale">缓存</span>' : '';
+  el.innerHTML =
+    `<div class="usage-oauth-head">限流用量${plan}${stale}</div>` +
+    oauthRow('5 小时窗口', o.fiveHour) +
+    oauthRow('7 天窗口', o.sevenDay);
+}
+function oauthRow(label, w) {
+  w = w || {};
+  const pct = Math.max(0, Math.min(100, Math.round(w.utilization || 0)));
+  const cls = pct >= 90 ? 'danger' : pct >= 70 ? 'warn' : '';
+  const reset = w.resetsAt ? oauthResetLabel(w.resetsAt) : '';
+  return `<div class="usage-oauth-row">` +
+    `<div class="usage-oauth-row-top"><span class="usage-oauth-label">${esc(label)}</span>` +
+      `<span class="usage-oauth-pct ${cls}">${pct}%</span></div>` +
+    `<div class="usage-bar"><div class="usage-bar-fill ${cls}" style="width:${pct}%"></div></div>` +
+    (reset ? `<div class="usage-oauth-reset">${esc(reset)}</div>` : '') +
+    `</div>`;
+}
+function oauthResetLabel(iso) {
+  const t = Date.parse(iso);
+  if (isNaN(t)) return '';
+  const d = t - Date.now();
+  if (d <= 0) return '即将重置';
+  const h = Math.floor(d / 3600000), m = Math.floor((d % 3600000) / 60000);
+  if (h >= 24) return `${Math.floor(h / 24)} 天 ${h % 24} 小时后重置`;
+  if (h >= 1) return `${h} 小时 ${m} 分后重置`;
+  return `${m} 分后重置`;
 }
 
 // Codex / OpenCode tab：只有周用量（这两个没有 5h 窗口概念）。

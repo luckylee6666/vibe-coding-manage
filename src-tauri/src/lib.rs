@@ -1377,7 +1377,7 @@ async fn claude_usage(state: State<'_, usage::UsageState>) -> Result<usage::Clau
     let auto = state
         .auto_hello
         .load(std::sync::atomic::Ordering::Relaxed);
-    let mut u = tauri::async_runtime::spawn_blocking(usage::fetch_usage)
+    let mut u = tauri::async_runtime::spawn_blocking(usage::fetch_usage_cached)
         .await
         .map_err(|e| e.to_string())?;
     u.auto_hello = auto;
@@ -1402,7 +1402,15 @@ fn set_auto_hello(state: State<usage::UsageState>, enabled: bool) -> Result<(), 
 /// 查询某个 CLI 的周用量（claude / codex / opencode），走 ccusage。
 #[tauri::command]
 async fn agent_weekly(agent: String) -> Result<usage::AgentWeekly, String> {
-    tauri::async_runtime::spawn_blocking(move || usage::fetch_agent_weekly(&agent))
+    tauri::async_runtime::spawn_blocking(move || usage::fetch_agent_weekly_cached(&agent))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// OAuth 限流用量（Claude 专属，同 /usage 数据源）：5h/7d 使用百分比 + 重置时间，带 60s 缓存。
+#[tauri::command]
+async fn oauth_usage() -> Result<usage::OAuthUsage, String> {
+    tauri::async_runtime::spawn_blocking(usage::fetch_oauth_usage)
         .await
         .map_err(|e| e.to_string())
 }
@@ -1481,6 +1489,7 @@ pub fn run() {
             get_auto_hello,
             set_auto_hello,
             agent_weekly,
+            oauth_usage,
             claude_hello_now
         ])
         .run(tauri::generate_context!())

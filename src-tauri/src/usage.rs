@@ -8,16 +8,16 @@
 //! 自动跑一次 `claude -p hello` 触发一次极小请求，立刻开一个新的 5h 窗口——
 //! 保证计时从你想要的时刻重新开始，不浪费窗口。
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
 
 /// 当前 5 小时窗口的用量快照，推给前端展示。
-#[derive(Serialize, Clone, Default)]
+#[derive(Serialize, Deserialize, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ClaudeUsage {
     /// ccusage 是否成功跑通（没装 / 没日志时为 false）
@@ -216,7 +216,7 @@ fn parse_blocks(json: &str) -> Result<ClaudeUsage, String> {
 // ============================================================================
 
 /// 单个 CLI 的周用量统计。
-#[derive(Serialize, Clone, Default)]
+#[derive(Serialize, Deserialize, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentWeekly {
     pub ok: bool,
@@ -232,7 +232,7 @@ pub struct AgentWeekly {
 }
 
 /// 一周的用量。
-#[derive(Serialize, Clone, Default)]
+#[derive(Serialize, Deserialize, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct WeekRow {
     /// 周起始日（周一）YYYY-MM-DD
@@ -411,6 +411,10 @@ pub fn poller(app: AppHandle) {
 
         let mut usage = fetch_usage();
         usage.auto_hello = true;
+        // 顺手刷新面板缓存，让前端开面板时吃到 poller 的新鲜数据
+        if usage.ok {
+            cache_write(&cache_file("ccusage-blocks-cache.json"), &usage);
+        }
         let _ = app.emit("claude-usage", usage.clone());
 
         if usage.ok && !usage.active {
@@ -442,6 +446,246 @@ pub fn poller(app: AppHandle) {
         }
 
         std::thread::sleep(Duration::from_secs(120));
+    }
+}
+
+// ============================================================================
+// OAuth 用量（限流窗口）：和 Claude Code 的 /usage 同一数据源
+// （GET api.anthropic.com/api/oauth/usage），给出 5h / 7d 的使用百分比 + 重置时间。
+// 比 ccusage 快得多（一次 https 调用），并带 60s 文件缓存。token 从钥匙串读。
+// ============================================================================
+
+/// 一个限流窗口（5 小时 / 7 天）。
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuthWindow {
+    /// 已用百分比 0-100
+    pub utilization: f64,
+    /// 重置时刻（ISO8601）
+    pub resets_at: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuthUsage {
+    pub ok: bool,
+    pub error: Option<String>,
+    pub five_hour: OAuthWindow,
+    pub seven_day: OAuthWindow,
+    pub plan: Option<String>,
+    /// true = 这是过期缓存（实时请求失败时回退）
+    pub stale: bool,
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn cache_file(name: &str) -> PathBuf {
+    dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("vibe-coding-manage")
+        .join(name)
+}
+fn oauth_cache_path() -> PathBuf {
+    cache_file("oauth-usage-cache.json")
+}
+
+/// 通用文件缓存：读。ttl_ms 内算新鲜；传 u64::MAX 表示不限期。
+fn cache_read<T: serde::de::DeserializeOwned>(path: &PathBuf, ttl_ms: u64) -> Option<T> {
+    let s = std::fs::read_to_string(path).ok()?;
+    let v: Value = serde_json::from_str(&s).ok()?;
+    let ts = v.get("ts").and_then(|x| x.as_u64())?;
+    if now_ms().saturating_sub(ts) > ttl_ms {
+        return None;
+    }
+    serde_json::from_value(v.get("data")?.clone()).ok()
+}
+/// 通用文件缓存：写（带时间戳）。
+fn cache_write<T: Serialize>(path: &PathBuf, data: &T) {
+    let v = serde_json::json!({ "ts": now_ms(), "data": data });
+    if let Ok(s) = serde_json::to_string(&v) {
+        let _ = std::fs::write(path, s);
+    }
+}
+
+/// 带缓存的 5h 窗口用量（面板用）：60s 内直接返缓存；否则实时拉并写缓存。
+/// 注意：后台 poller 仍走 fetch_usage() 实时版（要及时发现窗口重置触发 auto-hello），
+/// 但 poller 每轮会顺手刷新该缓存，让面板也吃到新鲜数据。
+pub fn fetch_usage_cached() -> ClaudeUsage {
+    let path = cache_file("ccusage-blocks-cache.json");
+    if let Some(c) = cache_read::<ClaudeUsage>(&path, 60_000) {
+        return c;
+    }
+    let u = fetch_usage();
+    if u.ok {
+        cache_write(&path, &u);
+    }
+    u
+}
+
+/// 带缓存的周用量（面板用）：周数据变化慢，缓存 10 分钟。
+pub fn fetch_agent_weekly_cached(agent: &str) -> AgentWeekly {
+    let path = cache_file(&format!("ccusage-weekly-{agent}-cache.json"));
+    if let Some(c) = cache_read::<AgentWeekly>(&path, 600_000) {
+        return c;
+    }
+    let w = fetch_agent_weekly(agent);
+    if w.ok {
+        cache_write(&path, &w);
+    }
+    w
+}
+
+/// 读 Claude 登录 token：优先 macOS 钥匙串（首用会弹一次授权框），
+/// 兜底读 ~/.claude/.credentials.json（Linux/Windows 或文件存储）。
+fn read_oauth_token() -> Option<String> {
+    let pick = |v: &Value| -> Option<String> {
+        v.pointer("/claudeAiOauth/accessToken")
+            .and_then(|x| x.as_str())
+            .map(|s| s.to_string())
+    };
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(out) = std::process::Command::new("/usr/bin/security")
+            .args(["find-generic-password", "-s", "Claude Code-credentials", "-w"])
+            .output()
+        {
+            if out.status.success() {
+                let s = String::from_utf8_lossy(&out.stdout);
+                if let Ok(v) = serde_json::from_str::<Value>(s.trim()) {
+                    if let Some(t) = pick(&v) {
+                        return Some(t);
+                    }
+                }
+            }
+        }
+    }
+    if let Some(home) = dirs::home_dir() {
+        if let Ok(s) = std::fs::read_to_string(home.join(".claude").join(".credentials.json")) {
+            if let Ok(v) = serde_json::from_str::<Value>(&s) {
+                if let Some(t) = pick(&v) {
+                    return Some(t);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// 调用 oauth/usage 接口。token 走 curl 的 stdin 配置（-K -），不进 argv（避免 ps 泄露）。
+fn fetch_oauth_usage_raw(token: &str) -> Result<String, String> {
+    use std::io::Write;
+    use std::process::Stdio;
+    let mut child = std::process::Command::new("curl")
+        .args([
+            "-s",
+            "--max-time",
+            "15",
+            "-K",
+            "-",
+            "https://api.anthropic.com/api/oauth/usage",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("启动 curl 失败：{e}"))?;
+    {
+        let mut stdin = child.stdin.take().ok_or("无法写入 curl stdin")?;
+        let cfg = format!(
+            "header = \"Authorization: Bearer {token}\"\nheader = \"anthropic-beta: oauth-2025-04-20\"\nheader = \"user-agent: claude-code/2.1\"\n"
+        );
+        stdin
+            .write_all(cfg.as_bytes())
+            .map_err(|e| format!("写 curl 配置失败：{e}"))?;
+    }
+    let out = child
+        .wait_with_output()
+        .map_err(|e| format!("等待 curl 失败：{e}"))?;
+    if !out.status.success() {
+        return Err("usage API 请求失败（网络/curl）".to_string());
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+fn parse_oauth_usage(json: &str) -> Result<OAuthUsage, String> {
+    let v: Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    if v.get("five_hour").is_none() && v.get("seven_day").is_none() {
+        // 可能是 token 过期 / API 用户 / 错误响应
+        let msg = v
+            .get("error")
+            .and_then(|e| e.get("message").or(Some(e)))
+            .and_then(|x| x.as_str())
+            .unwrap_or("usage API 返回异常（可能登录已过期，请在 Claude Code 重新登录）");
+        return Err(msg.to_string());
+    }
+    let win = |key: &str| -> OAuthWindow {
+        let o = v.get(key);
+        OAuthWindow {
+            utilization: o
+                .and_then(|x| x.get("utilization"))
+                .and_then(|x| x.as_f64())
+                .unwrap_or(0.0),
+            resets_at: o
+                .and_then(|x| x.get("resets_at"))
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string(),
+        }
+    };
+    Ok(OAuthUsage {
+        ok: true,
+        error: None,
+        five_hour: win("five_hour"),
+        seven_day: win("seven_day"),
+        plan: v.get("plan").and_then(|x| x.as_str()).map(|s| s.to_string()),
+        stale: false,
+    })
+}
+
+fn read_oauth_cache(ttl_ms: u64) -> Option<OAuthUsage> {
+    cache_read::<OAuthUsage>(&oauth_cache_path(), ttl_ms)
+}
+fn write_oauth_cache(u: &OAuthUsage) {
+    cache_write(&oauth_cache_path(), u);
+}
+
+/// 拉 OAuth 用量。60s 文件缓存命中则秒返；否则读 token → 调 API → 写缓存。
+/// 失败时回退到任意旧缓存（标 stale）。
+pub fn fetch_oauth_usage() -> OAuthUsage {
+    if let Some(c) = read_oauth_cache(60_000) {
+        return c;
+    }
+    let token = match read_oauth_token() {
+        Some(t) => t,
+        None => {
+            return OAuthUsage {
+                ok: false,
+                error: Some("未找到 Claude 登录凭据（需用 Claude Code 登录过；首次读取钥匙串会弹授权）".to_string()),
+                ..Default::default()
+            }
+        }
+    };
+    match fetch_oauth_usage_raw(&token).and_then(|j| parse_oauth_usage(&j)) {
+        Ok(u) => {
+            write_oauth_cache(&u);
+            u
+        }
+        Err(e) => {
+            if let Some(mut c) = read_oauth_cache(u64::MAX) {
+                c.stale = true;
+                return c;
+            }
+            OAuthUsage {
+                ok: false,
+                error: Some(e),
+                ..Default::default()
+            }
+        }
     }
 }
 
