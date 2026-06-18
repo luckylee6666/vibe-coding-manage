@@ -2308,7 +2308,7 @@ async function updateContextBadges() {
     if (!ctxEl) continue;
     if (tool !== 'claude' || !s.cwd) { ctxEl.style.display = 'none'; continue; }
     try {
-      const c = await invoke('context_usage', { id, cwd: s.cwd });
+      const c = await invoke('context_usage', { id, cwd: s.cwd, startedAt: s.startedAt || 0 });
       if (c && c.ok) {
         ctxEl.textContent = `ctx ${c.percent}%`;
         ctxEl.title = `上下文 ${c.tokens.toLocaleString()} / ${c.limit.toLocaleString()} tokens`;
@@ -2438,7 +2438,7 @@ async function createSession({ cwd = '', name = '', autoCmd = '' }) {
   }
   term.onData(d => invoke('terminal_write', { id, data: d }).catch(() => {}));
 
-  sessions.set(id, { term, fit, tabEl, bodyEl, name: label, status: 'running', cwd, tool: autoCmd });
+  sessions.set(id, { term, fit, tabEl, bodyEl, name: label, status: 'running', cwd, tool: autoCmd, startedAt: Date.now() });
 
   openDock();
   activateSession(id);

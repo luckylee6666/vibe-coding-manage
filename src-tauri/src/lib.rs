@@ -6,7 +6,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -1075,6 +1075,7 @@ async fn context_usage(
     state: State<'_, TerminalState>,
     id: String,
     cwd: String,
+    started_at: u64,
 ) -> Result<ContextUsage, String> {
     // 1) 窗口大小：缓存 → 否则从 scrollback 横幅探测并缓存
     let mut limit_override = state
@@ -1097,9 +1098,22 @@ async fn context_usage(
 
     // 2) token 数 + 占比（读 transcript，放阻塞线程）
     tauri::async_runtime::spawn_blocking(move || {
-        let mut cu = ContextUsage { ok: false, percent: 0, tokens: 0, limit: 200_000 };
+        let fallback_limit = limit_override.unwrap_or(200_000);
+        let mut cu = ContextUsage { ok: false, percent: 0, tokens: 0, limit: fallback_limit };
         let Some(dir) = find_claude_project_dir(&cwd) else { return cu };
         let Some(jsonl) = newest_jsonl(&dir) else { return cu };
+        // 只认「本会话开始之后」修改过的 transcript：新会话发第一句前还没有自己的
+        // transcript，最新那个是上一个会话——此时上下文应为 0，别拿旧会话的数充数。
+        let mtime_ms = fs::metadata(&jsonl)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        if mtime_ms + 2000 < started_at {
+            cu.ok = true; // 本会话尚无上下文
+            return cu;
+        }
         let Ok(content) = fs::read_to_string(&jsonl) else { return cu };
         for line in content.lines().rev() {
             let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
