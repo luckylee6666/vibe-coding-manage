@@ -1605,6 +1605,20 @@ async fn agent_weekly(agent: String) -> Result<usage::AgentWeekly, String> {
         .map_err(|e| e.to_string())
 }
 
+/// 检测本机是否有 npx（花费统计/Codex/OpenCode 经 ccusage 走 npx，没 npx 这些不可用）。
+#[tauri::command]
+async fn has_npx() -> bool {
+    tauri::async_runtime::spawn_blocking(usage::has_npx)
+        .await
+        .unwrap_or(false)
+}
+
+/// 用系统默认浏览器打开一个 URL（如引导去 nodejs.org 装 Node）。
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    opener::open(&url).map_err(|e| e.to_string())
+}
+
 /// OAuth 限流用量（Claude 专属，同 /usage 数据源）：5h/7d 使用百分比 + 重置时间，带 60s 缓存。
 #[tauri::command]
 async fn oauth_usage() -> Result<usage::OAuthUsage, String> {
@@ -1744,6 +1758,8 @@ pub fn run() {
             set_auto_hello,
             agent_weekly,
             oauth_usage,
+            has_npx,
+            open_url,
             claude_hello_now
         ])
         .run(tauri::generate_context!())

@@ -382,6 +382,14 @@ fn aggregate_daily_to_weeks(v: &Value) -> Result<Vec<WeekRow>, String> {
     Ok(map.into_values().collect())
 }
 
+/// 检测 npx 是否可用（ccusage 经 `npx -y` 自动拉取，所以只需 npx；有 npx 即可，
+/// 没装 ccusage 也会自动下载）。用显式标记判断，避免交互式 shell 启动噪声误判。
+pub fn has_npx() -> bool {
+    run_shell("command -v npx >/dev/null 2>&1 && echo __NPX_OK__", 15)
+        .map(|s| s.contains("__NPX_OK__"))
+        .unwrap_or(false)
+}
+
 /// 触发一次 `claude -p hello`，开一个新 5h 窗口。返回 claude 的输出（成功时）。
 pub fn fire_hello() -> Result<String, String> {
     // 进 HOME 跑，避免落在某个奇怪 cwd；输入接 /dev/null 防止它等输入

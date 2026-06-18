@@ -89,6 +89,14 @@ async function init() {
 
 // 自动 hello / 用量后台事件（与终端是否打开无关，启动即监听）
 async function bindUsageEvents() {
+  // 后台探一次 npx 是否可用（决定花费/Codex/OpenCode 是否降级），结果缓存
+  invoke('has_npx').then(v => { npxAvailable = v; }).catch(() => {});
+  // 「去安装 Node.js」按钮（降级块里，事件委托）
+  document.addEventListener('click', e => {
+    if (e.target.closest('.usage-install-node')) {
+      invoke('open_url', { url: 'https://nodejs.org/' }).catch(() => {});
+    }
+  });
   try {
     const listen = window.__TAURI__.event.listen;
     await listen('claude-usage', e => {
@@ -890,6 +898,16 @@ let usageCountdownTimer = null;
 let usageResetEpoch = 0;
 let usageAgent = 'claude';      // 当前用量 tab：claude / codex / opencode
 let lastClaudeWeekly = null;    // 缓存 Claude 周用量，poller 重渲染窗口时不丢失
+let npxAvailable = null;        // null=未知 / true / false：花费统计(ccusage)是否可用
+
+// 没有 npx 时花费/Codex/OpenCode 的友好降级块（限流用量不受影响）
+function nodeNeededHTML(what) {
+  return `<div class="usage-node-needed">` +
+    `<div class="usage-node-title">${esc(what)}需要 Node.js</div>` +
+    `<div class="usage-node-sub">限流用量无需 Node、已正常显示。花费/多 CLI 统计经 <code>ccusage</code>（随 <code>npx</code> 自动下载）读取本地日志，需先装 Node.js。</div>` +
+    `<button class="btn btn-primary btn-sm usage-install-node">去安装 Node.js</button>` +
+    `</div>`;
+}
 
 const MODEL_NAMES = {
   'claude-opus-4-8': 'Opus 4.8', 'claude-opus-4-7': 'Opus 4.7', 'claude-opus-4-6': 'Opus 4.6',
@@ -938,29 +956,39 @@ async function loadUsage() {
       body.innerHTML =
         '<div id="usage-oauth"><div class="usage-loading">查询限流用量…</div></div>' +
         '<div id="usage-ccusage" style="margin-top:14px;"><div class="usage-loading">查询花费（ccusage，首次稍慢）…</div></div>';
-      // OAuth 限流：和 /usage 同源，秒出
+      // OAuth 限流：和 /usage 同源，秒出（零依赖，不需要 Node）
       invoke('oauth_usage').then(o => {
         if (usageAgent === 'claude') renderOAuth(o);
       }).catch(() => {});
-      // ccusage 花费窗口（不阻塞 OAuth 显示）
-      invoke('claude_usage').then(u => {
-        if (usageAgent === 'claude') renderUsage(u);
-      }).catch(e => {
+      // 花费部分依赖 ccusage(npx)：没 npx 就友好降级，不丢报错
+      if (npxAvailable === false) {
         const cc = document.getElementById('usage-ccusage');
-        if (cc && usageAgent === 'claude') cc.innerHTML = `<div class="usage-error">花费查询失败：${esc(String(e))}</div>`;
-      });
-      // 周用量异步补在最下方
-      invoke('agent_weekly', { agent: 'claude' }).then(w => {
-        if (usageAgent !== 'claude') return;
-        lastClaudeWeekly = w;
-        const cc = document.getElementById('usage-ccusage');
-        const existing = document.getElementById('usage-weekly-sec');
-        if (existing) existing.outerHTML = renderWeeklyHTML(w, '周用量');
-        else if (cc) cc.insertAdjacentHTML('beforeend', renderWeeklyHTML(w, '周用量'));
-      }).catch(() => {});
+        if (cc) cc.innerHTML = nodeNeededHTML('花费统计');
+      } else {
+        // ccusage 花费窗口（不阻塞 OAuth 显示）
+        invoke('claude_usage').then(u => {
+          if (usageAgent === 'claude') renderUsage(u);
+        }).catch(e => {
+          const cc = document.getElementById('usage-ccusage');
+          if (cc && usageAgent === 'claude') cc.innerHTML = `<div class="usage-error">花费查询失败：${esc(String(e))}</div>`;
+        });
+        // 周用量异步补在最下方
+        invoke('agent_weekly', { agent: 'claude' }).then(w => {
+          if (usageAgent !== 'claude') return;
+          lastClaudeWeekly = w;
+          const cc = document.getElementById('usage-ccusage');
+          const existing = document.getElementById('usage-weekly-sec');
+          if (existing) existing.outerHTML = renderWeeklyHTML(w, '周用量');
+          else if (cc) cc.insertAdjacentHTML('beforeend', renderWeeklyHTML(w, '周用量'));
+        }).catch(() => {});
+      }
     } else {
-      body.innerHTML = '<div class="usage-loading">查询中…（首次走 npx 拉 ccusage，稍等）</div>';
       stopUsageCountdown();
+      if (npxAvailable === false) {
+        body.innerHTML = nodeNeededHTML(agent === 'codex' ? 'Codex 用量' : 'OpenCode 用量');
+        return;
+      }
+      body.innerHTML = '<div class="usage-loading">查询中…（首次走 npx 拉 ccusage，稍等）</div>';
       const w = await invoke('agent_weekly', { agent });
       if (usageAgent !== agent) return;
       body.innerHTML = renderAgentHTML(w, agent);

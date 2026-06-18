@@ -17,6 +17,10 @@ A desktop app for managing your Vibe Coding projects, built with Tauri v2.
 - **Session restore** — the terminal remembers your tab layout (dir + CLI per tab) and offers to restore it on next launch; Claude tabs come back with `--continue`
 - **Prompt/snippet library** — a toolbar bookmark icon holds reusable prompts/commands; click one to inject it into the current terminal (text only, no auto-Enter, so you can review before sending); add/edit/delete via a management dialog, stored in `snippets.json`
 - **Restore context** — a history icon on each project card opens a one-glance snapshot to resume work: git overview + recent commits + changed files + CLAUDE.md summary + the CLI you last launched there; footer buttons jump back in (open terminal / Claude)
+- **Rate-limit usage (no dependencies)** — the Claude usage panel shows your real 5-hour / 7-day limit utilization (% + reset countdown), same source as Claude Code's `/usage` (reads the Keychain token and calls the official endpoint; first read prompts a Keychain authorization); cached 60s, near-instant, **no Node required**
+- **Menu-bar tray** — a macOS menu-bar item shows `5h X% · 7d Y%`, refreshed every 60s; its menu opens the app / refreshes / quits
+- **Terminal context %** — Claude tabs show an `NN%` context-window badge (window size read from the startup banner, fill estimated from the transcript; amber ≥70%, red ≥90%); 0 before the first turn of a new session
+- **Cost stats (needs Node)** — Claude cost + Codex/OpenCode weekly usage go through `ccusage` (auto-fetched by `npx`) reading local logs; if Node is missing the section shows a friendly hint with a one-click install link and **does not affect the rate-limit usage above**
 - **Scan & import** — batch-import git projects from a directory (auto-reads remote, dedups by path)
 - **Search** — quickly filter by name, path, description
 - **Export** — export project data to Excel
