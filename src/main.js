@@ -2310,8 +2310,8 @@ async function updateContextBadges() {
     try {
       const c = await invoke('context_usage', { id, cwd: s.cwd, startedAt: s.startedAt || 0 });
       if (c && c.ok) {
-        ctxEl.textContent = `ctx ${c.percent}%`;
-        ctxEl.title = `上下文 ${c.tokens.toLocaleString()} / ${c.limit.toLocaleString()} tokens`;
+        ctxEl.textContent = `${c.percent}%`;
+        ctxEl.title = `上下文 ${c.percent}%（${c.tokens.toLocaleString()} / ${c.limit.toLocaleString()} tokens）`;
         ctxEl.className = 'term-tab-ctx' + (c.percent >= 90 ? ' danger' : c.percent >= 70 ? ' warn' : '');
         ctxEl.style.display = '';
       } else {

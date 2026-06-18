@@ -6,7 +6,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -789,25 +789,28 @@ fn git_status_one(path: &str) -> GitStatus {
     st
 }
 
-/// 批量扫描多个项目路径的 git 状态（并行，每仓库一线程）。
-/// git status 单仓库很快，整体在 spawn_blocking 里跑，绝不阻塞主线程。
+/// 批量扫描多个项目路径的 git 状态。整体在 spawn_blocking 里跑（绝不阻塞主线程），
+/// 内部按批并发（每批一线程），限制并发量避免项目极多时一次性 fork 上百个 git 进程。
 #[tauri::command]
 async fn git_status_batch(paths: Vec<String>) -> Result<Vec<GitStatus>, String> {
+    const MAX_CONCURRENT: usize = 12;
     tauri::async_runtime::spawn_blocking(move || {
-        let handles: Vec<_> = paths
-            .into_iter()
-            .map(|path| std::thread::spawn(move || git_status_one(&path)))
-            .collect();
-        handles
-            .into_iter()
-            .map(|h| {
-                h.join().unwrap_or_else(|_| {
+        let mut out = Vec::with_capacity(paths.len());
+        for chunk in paths.chunks(MAX_CONCURRENT) {
+            let handles: Vec<_> = chunk
+                .iter()
+                .cloned()
+                .map(|path| std::thread::spawn(move || git_status_one(&path)))
+                .collect();
+            for h in handles {
+                out.push(h.join().unwrap_or_else(|_| {
                     let mut s = GitStatus::empty(String::new());
                     s.error = true;
                     s
-                })
-            })
-            .collect()
+                }));
+            }
+        }
+        out
     })
     .await
     .map_err(|e| e.to_string())
@@ -1339,6 +1342,7 @@ fn terminal_create(
     let sid = id.clone();
     let hub_evt = state.hub.clone();
     let act_evt = state.activity.clone();
+    let ctxwin_evt = state.ctx_window.clone();
     std::thread::spawn(move || {
         let mut buf = [0u8; 8192];
         loop {
@@ -1377,6 +1381,9 @@ fn terminal_create(
         let _ = app_evt.emit("terminal-exit", &sid);
         hub_evt.mark_exit(&sid);
         if let Ok(mut map) = act_evt.lock() {
+            map.remove(&sid);
+        }
+        if let Ok(mut map) = ctxwin_evt.lock() {
             map.remove(&sid);
         }
     });
@@ -1787,8 +1794,10 @@ mod tests {
         let mut state = AppState {
             projects: vec![],
             servers: vec![],
+            snippets: vec![],
             data_path: data_path.clone(),
             server_path: dir.join("servers.json"),
+            snippet_path: dir.join("snippets.json"),
         };
 
         let now = "2025-01-01 00:00:00".to_string();
