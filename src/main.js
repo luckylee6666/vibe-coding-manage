@@ -2237,6 +2237,15 @@ function startTreeDragWatch(entry, e) {
   treeDrag = { entry, x: e.clientX, y: e.clientY, started: false, ghost: null };
 }
 
+// 兜底清理：无论拖拽如何结束（含离开窗口/失焦），都移除残留 ghost
+function cleanupTreeDrag() {
+  if (!treeDrag) return;
+  if (treeDrag.ghost) treeDrag.ghost.remove();
+  treeDrag = null;
+  document.body.style.userSelect = '';
+  termEl.dock.classList.remove('drag-target');
+}
+
 function setupTreeDrag() {
   document.addEventListener('mousemove', (e) => {
     if (!treeDrag) return;
@@ -2257,17 +2266,20 @@ function setupTreeDrag() {
   document.addEventListener('mouseup', (e) => {
     if (!treeDrag) return;
     const d = treeDrag;
-    treeDrag = null;
-    if (d.ghost) d.ghost.remove();
-    document.body.style.userSelect = '';
-    termEl.dock.classList.remove('drag-target');
-    if (d.started) {
+    const started = d.started;
+    cleanupTreeDrag();
+    if (started) {
       treeDragSuppressClick = true; // 抑制随后的 click（预览/展开）
       if (isOverTerminalArea(e.clientX, e.clientY) && activeSession) {
         insertPathToTerminal(d.entry.path);
       }
     }
   });
+  // 鼠标移出窗口 / 应用失焦时 mouseup 收不到，ghost 会卡住——兜底清理
+  document.addEventListener('mouseleave', (e) => {
+    if (treeDrag && (!e.relatedTarget && !e.toElement)) cleanupTreeDrag();
+  });
+  window.addEventListener('blur', cleanupTreeDrag);
 }
 
 // ===== 文件树右键菜单：插入路径 / 复制路径 / 移到废纸篓 =====
