@@ -2302,13 +2302,13 @@ function updateFabBadge() {
 // 终端标签上下文用量：claude 会话读自己项目的 transcript 估算当前上下文占比
 let ctxPollTimer = null;
 async function updateContextBadges() {
-  for (const [, s] of sessions) {
+  for (const [id, s] of sessions) {
     const tool = (s.tool || '').trim().split(/\s+/)[0];
     const ctxEl = s.tabEl && s.tabEl.querySelector('.term-tab-ctx');
     if (!ctxEl) continue;
     if (tool !== 'claude' || !s.cwd) { ctxEl.style.display = 'none'; continue; }
     try {
-      const c = await invoke('context_usage', { cwd: s.cwd });
+      const c = await invoke('context_usage', { id, cwd: s.cwd });
       if (c && c.ok) {
         ctxEl.textContent = `ctx ${c.percent}%`;
         ctxEl.title = `上下文 ${c.tokens.toLocaleString()} / ${c.limit.toLocaleString()} tokens`;

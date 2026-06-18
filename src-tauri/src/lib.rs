@@ -976,21 +976,14 @@ struct ContextUsage {
     limit: u64,
 }
 
-/// 估算模型上下文窗口上限。
-/// 难点：transcript 里 model id 是裸的 `claude-opus-4-8`（不带 `[1m]` 后缀，1M beta 是
-/// Claude Code 通过请求头开的、不落盘），磁盘上无从确知窗口大小。
-/// 折中：Opus 4.x 是 1M 上下文型号、本工具用户基本是 Max → 默认 1M；其余 200k；
-/// 另外只要实测用量已超基准就抬到 1M 兜底。和 Claude Code /usage(claude-hud) 的口径对齐。
-fn context_limit_for(model: &str, tokens: u64) -> u64 {
-    let base = if model.contains("[1m]") || model.contains("opus-4") {
+/// 上下文窗口上限的「兜底」估算——仅在没能从启动横幅探到窗口时用。
+/// 横幅没写 "(1M context)" 即默认标准 200k 窗口（1M 会话一定会在横幅标注，且我们会在
+/// 会话刚起时趁横幅还在抓并缓存）。只有实测用量已超 200k 才说明窗口更大，抬到 1M。
+fn context_limit_for(_model: &str, tokens: u64) -> u64 {
+    if tokens > 200_000 {
         1_000_000
     } else {
         200_000
-    };
-    if tokens > base {
-        1_000_000
-    } else {
-        base
     }
 }
 
@@ -1045,16 +1038,69 @@ fn newest_jsonl(dir: &std::path::Path) -> Option<PathBuf> {
     best.map(|(_, p)| p)
 }
 
-/// 估算某项目最近 Claude 会话的当前上下文占比。读最新 transcript 的最后一条带 usage
-/// 的 assistant 消息：context ≈ input + cache_read + cache_creation tokens。
+/// 从 claude 启动横幅探上下文窗口大小，如 "Opus 4.8 (1M context)" → 1_000_000、
+/// "(200K context)" → 200_000。横幅是 Claude Code 自带（非插件），每个会话都会打印。
+/// 没有 "(… context)" 标注 = 默认 200k 窗口。
+fn detect_context_window(s: &str) -> Option<u64> {
+    let lower = s.to_lowercase();
+    let idx = lower.find(" context)")?;
+    let head = lower[..idx].as_bytes();
+    let mut end = head.len();
+    while end > 0 && head[end - 1] == b' ' {
+        end -= 1;
+    }
+    if end == 0 {
+        return None;
+    }
+    let mult: u64 = match head[end - 1] {
+        b'm' => 1_000_000,
+        b'k' => 1_000,
+        _ => return None,
+    };
+    let mut start = end - 1;
+    while start > 0 && head[start - 1].is_ascii_digit() {
+        start -= 1;
+    }
+    let num: u64 = lower[start..end - 1].parse().ok()?;
+    Some(num * mult)
+}
+
+/// 估算某 Claude 会话的当前上下文占比。
+/// 分母（窗口大小）：优先从 claude 启动横幅 "(1M context)" 抓（最准、不依赖任何插件），
+///   按会话缓存；抓不到再按模型默认。
+/// 分子：读该项目最新 transcript 最后一条带 usage 的消息，
+///   context ≈ input + cache_read + cache_creation tokens。
 #[tauri::command]
-async fn context_usage(cwd: String) -> Result<ContextUsage, String> {
+async fn context_usage(
+    state: State<'_, TerminalState>,
+    id: String,
+    cwd: String,
+) -> Result<ContextUsage, String> {
+    // 1) 窗口大小：缓存 → 否则从 scrollback 横幅探测并缓存
+    let mut limit_override = state
+        .ctx_window
+        .lock()
+        .ok()
+        .and_then(|m| m.get(&id).copied());
+    if limit_override.is_none() {
+        let detected = state.hub.scrollback.lock().ok().and_then(|sb| {
+            sb.get(&id)
+                .and_then(|buf| detect_context_window(&String::from_utf8_lossy(buf)))
+        });
+        if let Some(w) = detected {
+            limit_override = Some(w);
+            if let Ok(mut m) = state.ctx_window.lock() {
+                m.insert(id.clone(), w);
+            }
+        }
+    }
+
+    // 2) token 数 + 占比（读 transcript，放阻塞线程）
     tauri::async_runtime::spawn_blocking(move || {
         let mut cu = ContextUsage { ok: false, percent: 0, tokens: 0, limit: 200_000 };
         let Some(dir) = find_claude_project_dir(&cwd) else { return cu };
         let Some(jsonl) = newest_jsonl(&dir) else { return cu };
         let Ok(content) = fs::read_to_string(&jsonl) else { return cu };
-        // 从后往前找最后一条带 usage 的 assistant 消息
         for line in content.lines().rev() {
             let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
             let Some(usage) = v.pointer("/message/usage") else { continue };
@@ -1069,7 +1115,8 @@ async fn context_usage(cwd: String) -> Result<ContextUsage, String> {
                 .pointer("/message/model")
                 .and_then(|x| x.as_str())
                 .unwrap_or("");
-            let limit = context_limit_for(model, tokens);
+            // 横幅探到的窗口最准；否则按模型默认兜底
+            let limit = limit_override.unwrap_or_else(|| context_limit_for(model, tokens));
             cu.ok = true;
             cu.tokens = tokens;
             cu.limit = limit;
@@ -1128,6 +1175,9 @@ struct TerminalState {
     hub: RemoteHub,
     /// 各会话输出活动追踪（reader 线程写、监控线程读）
     activity: ActivityMap,
+    /// 各会话探测到的上下文窗口大小（从 claude 启动横幅 "(1M context)" 抓，按会话缓存
+    /// 避免横幅被滚出 scrollback 后丢失）
+    ctx_window: Arc<Mutex<HashMap<String, u64>>>,
 }
 
 impl Default for TerminalState {
@@ -1135,6 +1185,7 @@ impl Default for TerminalState {
         Self {
             hub: RemoteHub::new(REMOTE_PORT),
             activity: Arc::new(Mutex::new(HashMap::new())),
+            ctx_window: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }
@@ -1386,6 +1437,9 @@ fn terminal_close(state: State<TerminalState>, id: String) -> Result<(), String>
         let _ = session.child.kill();
     }
     if let Ok(mut map) = state.activity.lock() {
+        map.remove(&id);
+    }
+    if let Ok(mut map) = state.ctx_window.lock() {
         map.remove(&id);
     }
     Ok(())
