@@ -1288,6 +1288,94 @@ body {
 }
 .snippet-row-actions { display: flex; gap: 4px; flex-shrink: 0; }
 
+/* ===== 项目"恢复现场" Modal ===== */
+.ctx-loading { padding: 28px 0; text-align: center; color: var(--text-3); font-size: 13px; }
+.ctx-section { margin-bottom: 16px; }
+.ctx-section:last-child { margin-bottom: 0; }
+.ctx-section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-3);
+  letter-spacing: 0.04em;
+  margin-bottom: 8px;
+}
+.ctx-overview { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.ctx-path {
+  font-family: "JetBrains Mono", Menlo, monospace;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.ctx-muted { font-size: 12px; color: var(--text-3); }
+.ctx-warn { font-size: 12.5px; color: var(--red); }
+
+.ctx-commits { display: flex; flex-direction: column; gap: 6px; }
+.ctx-commit {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 13px;
+}
+.ctx-hash {
+  font-family: "JetBrains Mono", Menlo, monospace;
+  font-size: 12px;
+  color: var(--blue);
+  flex-shrink: 0;
+}
+.ctx-subject {
+  flex: 1;
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ctx-rel { font-size: 11.5px; color: var(--text-3); flex-shrink: 0; }
+
+.ctx-files {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.ctx-file { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+.ctx-fstatus {
+  width: 16px;
+  text-align: center;
+  font-family: "JetBrains Mono", Menlo, monospace;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.ctx-modified { color: var(--orange); }
+.ctx-added { color: var(--green); }
+.ctx-deleted { color: var(--red); }
+.ctx-renamed { color: var(--blue); }
+.ctx-untracked { color: var(--text-3); }
+.ctx-fpath {
+  font-family: "JetBrains Mono", Menlo, monospace;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ctx-files-more { font-size: 12px; color: var(--text-3); padding-top: 4px; }
+.ctx-clean-note { font-size: 13px; color: var(--green); }
+
+.ctx-claude {
+  margin: 0;
+  padding: 12px;
+  max-height: 220px;
+  overflow: auto;
+  background: var(--bg-1, var(--bg-2));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font-family: "JetBrains Mono", Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 /* 文件树拖拽到终端时跟随光标的标签 */
 .tree-drag-ghost {
   position: fixed;

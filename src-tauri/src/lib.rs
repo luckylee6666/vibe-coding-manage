@@ -811,6 +811,154 @@ async fn git_status_batch(paths: Vec<String>) -> Result<Vec<GitStatus>, String> 
     .map_err(|e| e.to_string())
 }
 
+// ========== 项目"恢复现场" ==========
+
+#[derive(Clone, Serialize)]
+struct Commit {
+    hash: String,
+    subject: String,
+    /// 相对时间，如 "2 hours ago"（git 自带）
+    rel: String,
+}
+
+#[derive(Clone, Serialize)]
+struct ChangedFile {
+    /// porcelain 两字符状态码去空格后的值（M / A / D / R / ?? 等）
+    status: String,
+    path: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectContext {
+    is_repo: bool,
+    branch: String,
+    ahead: u32,
+    behind: u32,
+    changed: u32,
+    untracked: u32,
+    dirty: bool,
+    /// 最近提交（最多 5 条）
+    commits: Vec<Commit>,
+    /// 改动文件（最多 20 条）
+    files: Vec<ChangedFile>,
+    /// 还有多少改动文件未列出（files 截断后的剩余数）
+    files_more: u32,
+    /// CLAUDE.md 摘要（前若干字符；无则空）
+    claude_md: String,
+    /// 项目目录是否存在
+    exists: bool,
+}
+
+fn read_claude_md(dir: &std::path::Path) -> String {
+    let candidates = [dir.join("CLAUDE.md"), dir.join(".claude").join("CLAUDE.md")];
+    for c in candidates {
+        if let Ok(text) = fs::read_to_string(&c) {
+            // 取前若干非空行，拼成摘要，最长 ~500 字符
+            let mut out = String::new();
+            for line in text.lines() {
+                let l = line.trim_end();
+                if out.is_empty() && l.trim().is_empty() {
+                    continue; // 跳过开头空行
+                }
+                out.push_str(l);
+                out.push('\n');
+                if out.chars().count() >= 500 {
+                    break;
+                }
+            }
+            return out.trim_end().to_string();
+        }
+    }
+    String::new()
+}
+
+/// 聚合一个项目的"现场"：git 概览 + 最近提交 + 改动文件 + CLAUDE.md 摘要。
+#[tauri::command]
+async fn project_context(path: String) -> Result<ProjectContext, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = std::path::Path::new(&path);
+        let mut ctx = ProjectContext {
+            is_repo: false,
+            branch: String::new(),
+            ahead: 0,
+            behind: 0,
+            changed: 0,
+            untracked: 0,
+            dirty: false,
+            commits: Vec::new(),
+            files: Vec::new(),
+            files_more: 0,
+            claude_md: String::new(),
+            exists: dir.is_dir(),
+        };
+        if !ctx.exists {
+            return ctx;
+        }
+        ctx.claude_md = read_claude_md(dir);
+
+        // git 概览复用 git_status_one
+        let st = git_status_one(&path);
+        ctx.is_repo = st.is_repo;
+        ctx.branch = st.branch;
+        ctx.ahead = st.ahead;
+        ctx.behind = st.behind;
+        ctx.changed = st.changed;
+        ctx.untracked = st.untracked;
+        ctx.dirty = st.dirty;
+
+        if ctx.is_repo {
+            // 最近提交
+            if let Ok(out) = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&path)
+                .args(["log", "-n", "5", "--pretty=format:%h%x1f%s%x1f%cr"])
+                .output()
+            {
+                if out.status.success() {
+                    for line in String::from_utf8_lossy(&out.stdout).lines() {
+                        let mut parts = line.split('\u{1f}');
+                        if let (Some(h), Some(s), Some(r)) =
+                            (parts.next(), parts.next(), parts.next())
+                        {
+                            ctx.commits.push(Commit {
+                                hash: h.to_string(),
+                                subject: s.to_string(),
+                                rel: r.to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+            // 改动文件
+            if let Ok(out) = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&path)
+                .args(["status", "--porcelain"])
+                .output()
+            {
+                if out.status.success() {
+                    let text = String::from_utf8_lossy(&out.stdout);
+                    let lines: Vec<&str> = text.lines().filter(|l| l.len() > 3).collect();
+                    let total = lines.len();
+                    for l in lines.iter().take(20) {
+                        ctx.files.push(ChangedFile {
+                            status: l[..2].trim().to_string(),
+                            path: l[3..].trim().to_string(),
+                        });
+                    }
+                    if total > 20 {
+                        ctx.files_more = (total - 20) as u32;
+                    }
+                }
+            }
+        }
+        ctx
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
 // ========== 内置终端（PTY）==========
 
 // ===== 会话状态感知（"AI 跑完/在等你"检测）=====
@@ -1326,6 +1474,7 @@ pub fn run() {
             terminal_remote_info,
             notify,
             git_status_batch,
+            project_context,
             get_snippets,
             save_snippets,
             claude_usage,

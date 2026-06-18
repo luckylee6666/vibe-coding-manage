@@ -16,6 +16,7 @@ A desktop app for managing your Vibe Coding projects, built with Tauri v2.
 - **Git status badges** — local project cards show the current branch, working-tree changes (● tracked / + untracked), and ahead/behind vs upstream (↑/↓), or a green ✓ when clean; scanned in the background, refreshed on launch and window focus
 - **Session restore** — the terminal remembers your tab layout (dir + CLI per tab) and offers to restore it on next launch; Claude tabs come back with `--continue`
 - **Prompt/snippet library** — a toolbar bookmark icon holds reusable prompts/commands; click one to inject it into the current terminal (text only, no auto-Enter, so you can review before sending); add/edit/delete via a management dialog, stored in `snippets.json`
+- **Restore context** — a history icon on each project card opens a one-glance snapshot to resume work: git overview + recent commits + changed files + CLAUDE.md summary + the CLI you last launched there; footer buttons jump back in (open terminal / Claude)
 - **Scan & import** — batch-import git projects from a directory (auto-reads remote, dedups by path)
 - **Search** — quickly filter by name, path, description
 - **Export** — export project data to Excel

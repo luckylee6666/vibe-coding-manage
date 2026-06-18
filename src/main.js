@@ -310,6 +310,9 @@ function render(list) {
           </div>
         </div>
         <div class="card-actions">
+          <button class="action-btn context-btn" title="恢复现场（git/改动/CLAUDE.md）">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 106 5.3L3 8"/><path d="M12 7v5l3 2"/></svg>
+          </button>
           <button class="action-btn terminal-btn" title="打开终端">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6.75 7.5l3 2.25-3 2.25m4.5 0h3M3.375 3h17.25c.621 0 1.125.504 1.125 1.125v15.75c0 .621-.504 1.125-1.125 1.125H3.375c-.621 0-1.125-.504-1.125-1.125V4.125C2.25 3.504 2.754 3 3.375 3z"/></svg>
           </button>
@@ -328,6 +331,10 @@ function render(list) {
     const id = card.dataset.id;
     const p = projects.find(x => x.id === id);
     if (!p) return;
+    card.querySelector('.context-btn').onclick = (ev) => {
+      ev.stopPropagation();
+      openContextModal(p);
+    };
     card.querySelector('.terminal-btn').onclick = (ev) => {
       ev.stopPropagation();
       openLaunchMenu(p, ev.currentTarget);
@@ -475,6 +482,11 @@ function bind() {
     if (!e.target.closest('#snippet-menu') && !e.target.closest('#terminal-snippet-btn')) closeSnippetMenu();
   });
   window.addEventListener('resize', closeSnippetMenu);
+  // 恢复现场 Modal
+  $('context-modal-close').onclick = closeContextModal;
+  $('context-modal-overlay').onclick = e => { if (e.target === $('context-modal-overlay')) closeContextModal(); };
+  $('context-open-terminal').onclick = () => { const p = contextProject; if (p) { closeContextModal(); openTerminal(p, ''); } };
+  $('context-open-claude').onclick = () => { const p = contextProject; if (p) { closeContextModal(); openTerminal(p, 'claude'); } };
   // 窗口重新获得焦点时，正在看的会话就别再亮"需要关注"了 + 刷新 git 状态
   let gitFocusTimer = null;
   window.addEventListener('focus', () => {
@@ -670,6 +682,7 @@ async function browse() {
 
 async function openTerminal(p, cmd) {
   try {
+    recordProjectActivity(p.id, cmd);
     await createSession({ cwd: p.localPath, name: p.name, autoCmd: cmd });
   } catch (e) {
     console.error('打开终端失败:', e);
@@ -1551,6 +1564,124 @@ function renderSnippetList() {
       });
     };
   });
+}
+
+// ===== 项目"恢复现场"：git 概览 + 最近提交 + 改动文件 + CLAUDE.md 摘要 =====
+let contextProject = null;
+
+// 记录某项目最近一次启动了哪个 CLI（恢复现场里显示"上次：claude · 2 小时前"）
+function recordProjectActivity(projectId, cmd) {
+  if (!projectId) return;
+  try {
+    const log = JSON.parse(localStorage.getItem('project-activity') || '{}');
+    log[projectId] = { cli: (cmd || '').trim().split(/\s+/)[0] || '', at: Date.now() };
+    localStorage.setItem('project-activity', JSON.stringify(log));
+  } catch (_) {}
+}
+function getProjectActivity(projectId) {
+  try {
+    const log = JSON.parse(localStorage.getItem('project-activity') || '{}');
+    return log[projectId] || null;
+  } catch (_) { return null; }
+}
+function relTimeFromMs(ms) {
+  const d = Date.now() - ms;
+  const m = Math.floor(d / 60000);
+  if (m < 1) return '刚刚';
+  if (m < 60) return m + ' 分钟前';
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + ' 小时前';
+  return Math.floor(h / 24) + ' 天前';
+}
+function ctxStatusLabel(code) {
+  if (code === '??') return { t: '?', cls: 'untracked', name: '未追踪' };
+  if (code.includes('A')) return { t: 'A', cls: 'added', name: '新增' };
+  if (code.includes('D')) return { t: 'D', cls: 'deleted', name: '删除' };
+  if (code.includes('R')) return { t: 'R', cls: 'renamed', name: '重命名' };
+  if (code.includes('M')) return { t: 'M', cls: 'modified', name: '修改' };
+  return { t: code || '·', cls: 'modified', name: code };
+}
+
+async function openContextModal(p) {
+  contextProject = p;
+  $('context-modal-title').textContent = p.name + ' · 恢复现场';
+  $('context-loading').style.display = '';
+  $('context-loading').textContent = '加载中…';
+  $('context-content').style.display = 'none';
+  $('context-content').innerHTML = '';
+  $('context-footer').style.display = 'none';
+  $('context-modal-overlay').classList.add('active');
+  let ctx;
+  try {
+    ctx = await invoke('project_context', { path: p.localPath });
+  } catch (e) {
+    $('context-loading').textContent = '加载失败: ' + (e.message || e);
+    return;
+  }
+  if (contextProject !== p) return; // 期间切了别的项目，丢弃这次结果
+  renderContext(p, ctx);
+}
+function closeContextModal() {
+  $('context-modal-overlay').classList.remove('active');
+  contextProject = null;
+}
+
+function renderContext(p, ctx) {
+  $('context-loading').style.display = 'none';
+  const content = $('context-content');
+  content.style.display = '';
+  const act = getProjectActivity(p.id);
+  let html = '';
+
+  // 概览
+  html += '<div class="ctx-section"><div class="ctx-section-title">概览</div><div class="ctx-overview">';
+  html += `<span class="ctx-path" title="${escAttr(p.localPath)}">${esc(short(p.localPath))}</span>`;
+  if (!ctx.exists) {
+    html += '<span class="ctx-warn">⚠ 目录不存在</span>';
+  } else if (ctx.isRepo) {
+    html += `<span class="git-badge ${ctx.dirty ? 'is-dirty' : 'is-clean'}"><span class="git-branch">${esc(ctx.branch || '?')}</span>`;
+    if (ctx.changed) html += `<span class="git-m git-changed">●${ctx.changed}</span>`;
+    if (ctx.untracked) html += `<span class="git-m git-untracked">+${ctx.untracked}</span>`;
+    if (ctx.ahead) html += `<span class="git-m git-ahead">↑${ctx.ahead}</span>`;
+    if (ctx.behind) html += `<span class="git-m git-behind">↓${ctx.behind}</span>`;
+    if (!ctx.dirty && !ctx.ahead && !ctx.behind) html += '<span class="git-m git-ok">✓</span>';
+    html += '</span>';
+  } else {
+    html += '<span class="ctx-muted">非 git 仓库</span>';
+  }
+  if (act) html += `<span class="ctx-muted">上次：${act.cli ? esc(act.cli) + ' · ' : ''}${relTimeFromMs(act.at)}</span>`;
+  html += '</div></div>';
+
+  // 最近提交
+  if (ctx.commits && ctx.commits.length) {
+    html += '<div class="ctx-section"><div class="ctx-section-title">最近提交</div><div class="ctx-commits">';
+    ctx.commits.forEach(c => {
+      html += `<div class="ctx-commit"><span class="ctx-hash">${esc(c.hash)}</span><span class="ctx-subject" title="${escAttr(c.subject)}">${esc(c.subject)}</span><span class="ctx-rel">${esc(c.rel)}</span></div>`;
+    });
+    html += '</div></div>';
+  }
+
+  // 改动文件
+  if (ctx.files && ctx.files.length) {
+    html += `<div class="ctx-section"><div class="ctx-section-title">改动文件 ${ctx.changed + ctx.untracked}</div><div class="ctx-files">`;
+    ctx.files.forEach(f => {
+      const s = ctxStatusLabel(f.status);
+      html += `<div class="ctx-file"><span class="ctx-fstatus ctx-${s.cls}" title="${esc(s.name)}">${esc(s.t)}</span><span class="ctx-fpath" title="${escAttr(f.path)}">${esc(f.path)}</span></div>`;
+    });
+    if (ctx.filesMore) html += `<div class="ctx-files-more">还有 ${ctx.filesMore} 个未列出…</div>`;
+    html += '</div></div>';
+  } else if (ctx.isRepo && ctx.exists) {
+    html += '<div class="ctx-section"><div class="ctx-clean-note">工作区干净，无改动 ✓</div></div>';
+  }
+
+  // CLAUDE.md 摘要
+  if (ctx.claudeMd) {
+    html += '<div class="ctx-section"><div class="ctx-section-title">CLAUDE.md</div>';
+    html += `<pre class="ctx-claude">${esc(ctx.claudeMd)}</pre></div>`;
+  }
+
+  content.innerHTML = html;
+  $('context-footer').style.display = ctx.exists ? '' : 'none';
 }
 
 function b64ToBytes(b64) {

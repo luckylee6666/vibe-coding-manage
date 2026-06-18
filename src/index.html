@@ -438,6 +438,26 @@
       </div>
     </div>
 
+    <!-- 项目"恢复现场" Modal -->
+    <div class="modal-mask" id="context-modal-overlay">
+      <div class="modal-wrap">
+        <div class="modal modal-lg">
+          <div class="modal-header">
+            <span class="modal-title" id="context-modal-title">恢复现场</span>
+            <button class="modal-x" id="context-modal-close">&times;</button>
+          </div>
+          <div class="modal-body" id="context-modal-body">
+            <div class="ctx-loading" id="context-loading">加载中…</div>
+            <div id="context-content" style="display:none;"></div>
+          </div>
+          <div class="modal-footer" id="context-footer" style="display:none;">
+            <button class="btn btn-default" id="context-open-terminal">打开终端</button>
+            <button class="btn btn-primary" id="context-open-claude">打开 Claude</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Prompt 片段库：快速注入下拉 -->
     <div class="snippet-menu" id="snippet-menu"></div>
 
