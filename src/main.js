@@ -2439,8 +2439,10 @@ async function createSession({ cwd = '', name = '', autoCmd = '' }) {
   const tabEl = document.createElement('div');
   tabEl.className = 'term-tab';
   tabEl.dataset.id = id;
-  const toolBadge = autoCmd
-    ? `<span class="term-tab-tool tool-${esc(autoCmd)}">${esc(autoCmd)}</span>`
+  // 徽标只显示工具名（命令首词），不显示参数——否则恢复会话的 "claude --continue" 会整条塞进徽标
+  const toolName = (autoCmd || '').trim().split(/\s+/)[0] || '';
+  const toolBadge = toolName
+    ? `<span class="term-tab-tool tool-${esc(toolName)}">${esc(toolName)}</span>`
     : '';
   tabEl.innerHTML =
     `<span class="term-tab-dot"></span>` +
