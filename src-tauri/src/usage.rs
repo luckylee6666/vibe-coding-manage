@@ -616,8 +616,11 @@ fn read_oauth_token() -> Option<String> {
 fn curl_bin() -> &'static str {
     if cfg!(target_os = "windows") {
         "curl"
-    } else {
+    } else if std::path::Path::new("/usr/bin/curl").exists() {
         "/usr/bin/curl"
+    } else {
+        // 个别发行版 curl 不在 /usr/bin，回退裸名走 PATH
+        "curl"
     }
 }
 
@@ -750,12 +753,21 @@ pub fn fetch_oauth_usage() -> OAuthUsage {
         Ok(mut u) => {
             u.stale = false;
             u.age_secs = 0;
-            write_oauth_cache(&u);
-            crate::log_info!(
-                "oauth 用量已刷新：5h {}% · 周 {}%",
+            // 只在数值变化时记 INFO（先读旧缓存再写），避免每分钟一条例行成功淹没日志
+            let prev = read_oauth_cache_with_age().map(|(c, _)| {
+                (
+                    c.five_hour.utilization.round() as i64,
+                    c.seven_day.utilization.round() as i64,
+                )
+            });
+            let now = (
                 u.five_hour.utilization.round() as i64,
-                u.seven_day.utilization.round() as i64
+                u.seven_day.utilization.round() as i64,
             );
+            if prev != Some(now) {
+                crate::log_info!("oauth 用量刷新：5h {}% · 周 {}%", now.0, now.1);
+            }
+            write_oauth_cache(&u);
             u
         }
         Err(e) => {

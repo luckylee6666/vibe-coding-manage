@@ -8,14 +8,21 @@ try {
 
 // 把前端日志/未捕获异常转发到后端统一的 app.log（排查问题用）。
 function appLog(level, msg) {
-  try { invoke('app_log', { level, msg: String(msg) }); } catch (_) {}
+  // .catch 兜底：app_log 自身若被拒，绝不能再冒泡成 unhandledrejection（否则会自我放大成日志风暴）
+  try { invoke('app_log', { level, msg: String(msg) }).catch(() => {}); } catch (_) {}
 }
 window.addEventListener('error', e => {
+  // 跳过资源加载错误（img/script 404 等，message 为空），只记真正的脚本错误
+  if (!e.message) return;
   appLog('error', `JS 错误：${e.message} @ ${e.filename}:${e.lineno}:${e.colno}`);
 });
 window.addEventListener('unhandledrejection', e => {
   const r = e.reason;
-  appLog('error', `未处理的 Promise 拒绝：${(r && r.message) ? r.message : r}`);
+  let detail;
+  if (r && r.message) detail = r.message;
+  else if (typeof r === 'string') detail = r;
+  else { try { detail = JSON.stringify(r); } catch (_) { detail = String(r); } }
+  appLog('error', `未处理的 Promise 拒绝：${detail}`);
 });
 
 let projects = [];
