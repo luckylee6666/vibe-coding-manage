@@ -25,6 +25,13 @@
               <span>全部项目</span>
               <span class="menu-badge" id="count-all">0</span>
             </a>
+            <a class="menu-item" href="#" id="req-entry" title="碎片需求收集箱：随手记，省着忘">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M9 12h6m-6 3.75h6M9 8.25h6M5.25 6A2.25 2.25 0 017.5 3.75h9A2.25 2.25 0 0118.75 6v13.06c0 .98-1.1 1.56-1.9 1l-2.6-1.82a1.5 1.5 0 00-1.72 0l-2.6 1.82c-.8.56-1.9-.02-1.9-1V6z"/>
+              </svg>
+              <span>需求清单</span>
+              <span class="menu-badge" id="req-count" style="display:none;">0</span>
+            </a>
           </div>
           <div class="menu-group">
             <div class="menu-label">项目分组</div>
@@ -481,6 +488,45 @@
             </div>
             <div class="snippet-list" id="snippet-list"></div>
             <div class="server-empty" id="snippet-empty">暂无片段，在上方填写后「保存片段」</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 需求清单：碎片需求收集箱 -->
+    <div class="modal-mask" id="req-modal-overlay">
+      <div class="modal-wrap">
+        <div class="modal modal-lg">
+          <div class="modal-header">
+            <span class="modal-title">需求清单</span>
+            <button class="modal-x" id="req-modal-close">&times;</button>
+          </div>
+          <div class="modal-body">
+            <!-- 速记：输入即存，回车提交 -->
+            <div class="req-capture">
+              <input class="form-input req-capture-input" type="text" id="req-input"
+                     placeholder="随手记一条需求 / 想法，回车保存…" maxlength="200" />
+              <select class="form-select req-capture-sel" id="req-priority" title="优先级">
+                <option value="normal">普通</option>
+                <option value="high">重要</option>
+                <option value="low">次要</option>
+              </select>
+              <select class="form-select req-capture-sel" id="req-project" title="关联项目">
+                <option value="">不关联项目</option>
+              </select>
+              <button class="btn btn-primary" id="req-add-btn">添加</button>
+            </div>
+
+            <!-- 过滤页签 -->
+            <div class="req-tabs" id="req-tabs">
+              <button class="req-tab active" data-filter="all">全部 <span class="req-tab-count" id="req-c-all">0</span></button>
+              <button class="req-tab" data-filter="todo">待办 <span class="req-tab-count" id="req-c-todo">0</span></button>
+              <button class="req-tab" data-filter="doing">进行中 <span class="req-tab-count" id="req-c-doing">0</span></button>
+              <button class="req-tab" data-filter="done">已完成 <span class="req-tab-count" id="req-c-done">0</span></button>
+            </div>
+
+            <div class="req-list" id="req-list"></div>
+            <div class="server-empty" id="req-empty">还没有需求，在上方随手记一条吧</div>
           </div>
         </div>
       </div>

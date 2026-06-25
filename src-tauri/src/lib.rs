@@ -15,6 +15,7 @@ use uuid::Uuid;
 mod remote;
 use remote::{PtySession, RemoteHub, SessionMeta};
 mod usage;
+mod applog;
 
 /// 手机端远程服务监听端口（局域网）。
 const REMOTE_PORT: u16 = 8787;
@@ -70,15 +71,43 @@ pub struct Snippet {
     pub created_at: String,
 }
 
+/// 需求清单：开发随手记录的碎片需求/想法收集箱。
+/// 默认是全局收集箱，`project_id` 为可选的项目关联标签。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Requirement {
+    pub id: String,
+    pub title: String,
+    /// 可选补充说明
+    #[serde(default)]
+    pub note: String,
+    /// todo | doing | done
+    #[serde(default)]
+    pub status: String,
+    /// high | normal | low
+    #[serde(default)]
+    pub priority: String,
+    /// 可选关联项目 id（空 = 未关联）
+    #[serde(default, alias = "project_id")]
+    pub project_id: String,
+    #[serde(default, alias = "created_at")]
+    pub created_at: String,
+    #[serde(default, alias = "updated_at")]
+    pub updated_at: String,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct AppState {
     projects: Vec<Project>,
     servers: Vec<Server>,
     #[serde(default)]
     snippets: Vec<Snippet>,
+    #[serde(default)]
+    requirements: Vec<Requirement>,
     data_path: PathBuf,
     server_path: PathBuf,
     snippet_path: PathBuf,
+    requirement_path: PathBuf,
 }
 
 impl AppState {
@@ -113,25 +142,60 @@ impl AppState {
             Vec::new()
         };
 
-        Self { projects, servers, snippets, data_path, server_path, snippet_path }
+        let requirement_path = data_dir.join("requirements.json");
+        let requirements = if requirement_path.exists() {
+            let data = fs::read_to_string(&requirement_path).unwrap_or_default();
+            serde_json::from_str(&data).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
+        Self {
+            projects,
+            servers,
+            snippets,
+            requirements,
+            data_path,
+            server_path,
+            snippet_path,
+            requirement_path,
+        }
     }
 
     fn save_projects(&self) -> Result<(), String> {
         let data = serde_json::to_string_pretty(&self.projects)
             .map_err(|e| e.to_string())?;
-        fs::write(&self.data_path, data).map_err(|e| e.to_string())
+        fs::write(&self.data_path, data).map_err(|e| {
+            crate::log_error!("写 projects.json 失败：{e}");
+            e.to_string()
+        })
     }
 
     fn save_servers(&self) -> Result<(), String> {
         let data = serde_json::to_string_pretty(&self.servers)
             .map_err(|e| e.to_string())?;
-        fs::write(&self.server_path, data).map_err(|e| e.to_string())
+        fs::write(&self.server_path, data).map_err(|e| {
+            crate::log_error!("写 servers.json 失败：{e}");
+            e.to_string()
+        })
     }
 
     fn save_snippets(&self) -> Result<(), String> {
         let data = serde_json::to_string_pretty(&self.snippets)
             .map_err(|e| e.to_string())?;
-        fs::write(&self.snippet_path, data).map_err(|e| e.to_string())
+        fs::write(&self.snippet_path, data).map_err(|e| {
+            crate::log_error!("写 snippets.json 失败：{e}");
+            e.to_string()
+        })
+    }
+
+    fn save_requirements(&self) -> Result<(), String> {
+        let data = serde_json::to_string_pretty(&self.requirements)
+            .map_err(|e| e.to_string())?;
+        fs::write(&self.requirement_path, data).map_err(|e| {
+            crate::log_error!("写 requirements.json 失败：{e}");
+            e.to_string()
+        })
     }
 }
 
@@ -471,6 +535,44 @@ fn save_snippets(
     state.snippets = snippets.clone();
     state.save_snippets()?;
     Ok(snippets)
+}
+
+#[tauri::command]
+fn get_requirements(state: State<Mutex<AppState>>) -> Result<Vec<Requirement>, String> {
+    let state = state.lock().map_err(|e| e.to_string())?;
+    Ok(state.requirements.clone())
+}
+
+/// 整表保存（前端管理增删改后回写）。补齐缺失的 id / 默认值 / 时间戳。
+#[tauri::command]
+fn save_requirements(
+    state: State<Mutex<AppState>>,
+    requirements: Vec<Requirement>,
+) -> Result<Vec<Requirement>, String> {
+    let mut state = state.lock().map_err(|e| e.to_string())?;
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let requirements: Vec<Requirement> = requirements
+        .into_iter()
+        .map(|mut r| {
+            if r.id.is_empty() {
+                r.id = Uuid::new_v4().to_string();
+            }
+            if r.status.is_empty() {
+                r.status = "todo".to_string();
+            }
+            if r.priority.is_empty() {
+                r.priority = "normal".to_string();
+            }
+            if r.created_at.is_empty() {
+                r.created_at = now.clone();
+            }
+            r.updated_at = now.clone();
+            r
+        })
+        .collect();
+    state.requirements = requirements.clone();
+    state.save_requirements()?;
+    Ok(requirements)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1306,9 +1408,20 @@ fn terminal_create(
     }
     cmd.env("TERM", "xterm-256color");
 
-    let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
+    let child = pair.slave.spawn_command(cmd).map_err(|e| {
+        crate::log_error!(
+            "终端 spawn 失败（id={id} tool={}）：{e}",
+            tool.as_deref().unwrap_or("")
+        );
+        e.to_string()
+    })?;
     // slave 句柄在 spawn 后即可释放，否则子进程退出时读端不会收到 EOF
     drop(pair.slave);
+    crate::log_info!(
+        "终端已创建：id={id} tool={} cwd={}",
+        tool.as_deref().unwrap_or(""),
+        if cwd.is_empty() { "(默认)" } else { cwd.as_str() }
+    );
 
     let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
     let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
@@ -1528,6 +1641,8 @@ fn ensure_remote_started(hub: &remote::RemoteHub) {
         if let Ok(mut t) = hub.token.lock() {
             *t = pin;
         }
+        // 记端口（对外暴露事件值得留痕）；PIN 属敏感信息，绝不入日志
+        crate::log_info!("手机远程服务已启动，监听端口 {}（PIN 不记录）", hub.port);
         remote::spawn_server(hub.clone());
     }
 }
@@ -1619,6 +1734,29 @@ fn open_url(url: String) -> Result<(), String> {
     opener::open(&url).map_err(|e| e.to_string())
 }
 
+/// 打开日志文件（排查问题用）。文件不存在则先建空文件再打开。
+#[tauri::command]
+fn open_log() -> Result<(), String> {
+    let path = applog::log_path();
+    if !path.exists() {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).ok();
+        }
+        std::fs::write(&path, b"").map_err(|e| e.to_string())?;
+    }
+    opener::open(&path).map_err(|e| e.to_string())
+}
+
+/// 供前端写日志（未捕获异常 / 关键 catch 转发到同一份 app.log）。
+#[tauri::command]
+fn app_log(level: String, msg: String) {
+    match level.as_str() {
+        "error" => applog::error(&format!("[前端] {msg}")),
+        "warn" => applog::warn(&format!("[前端] {msg}")),
+        _ => applog::info(&format!("[前端] {msg}")),
+    }
+}
+
 /// OAuth 限流用量（Claude 专属，同 /usage 数据源）：5h/7d 使用百分比 + 重置时间，带 60s 缓存。
 #[tauri::command]
 async fn oauth_usage() -> Result<usage::OAuthUsage, String> {
@@ -1631,11 +1769,17 @@ async fn oauth_usage() -> Result<usage::OAuthUsage, String> {
 fn update_tray_usage(app: &AppHandle) {
     let u = usage::fetch_oauth_usage();
     let title = if u.ok {
-        format!(
+        let base = format!(
             "5h {}% · 周 {}%",
             u.five_hour.utilization.round() as i64,
             u.seven_day.utilization.round() as i64
-        )
+        );
+        // 过期回退（实时刷新失败）：加感叹号提示，别把旧值伪装成现值
+        if u.stale {
+            format!("⚠ {base}")
+        } else {
+            base
+        }
     } else {
         "用量 —".to_string()
     };
@@ -1654,6 +1798,11 @@ async fn claude_hello_now() -> Result<String, String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    log_info!(
+        "===== 应用启动 v{} ({}) =====",
+        env!("CARGO_PKG_VERSION"),
+        std::env::consts::OS
+    );
     let state = Mutex::new(AppState::new());
     let term_state = TerminalState::default();
     let activity_for_monitor = term_state.activity.clone();
@@ -1681,12 +1830,14 @@ pub fn run() {
             // 菜单栏托盘：常驻显示 5h / 周限流用量，菜单可打开主窗/刷新/退出
             let show_i = MenuItem::with_id(app, "tray_show", "打开 Vibe Coding Manager", true, None::<&str>)?;
             let refresh_i = MenuItem::with_id(app, "tray_refresh", "刷新用量", true, None::<&str>)?;
+            let log_i = MenuItem::with_id(app, "tray_log", "打开日志", true, None::<&str>)?;
             let quit_i = MenuItem::with_id(app, "tray_quit", "退出", true, None::<&str>)?;
             let tray_menu = Menu::with_items(
                 app,
                 &[
                     &show_i as &dyn tauri::menu::IsMenuItem<_>,
                     &refresh_i,
+                    &log_i,
                     &quit_i,
                 ],
             )?;
@@ -1703,6 +1854,11 @@ pub fn run() {
                         }
                     }
                     "tray_refresh" => update_tray_usage(app),
+                    "tray_log" => {
+                        if let Err(e) = open_log() {
+                            log_warn!("打开日志失败：{e}");
+                        }
+                    }
                     "tray_quit" => app.exit(0),
                     _ => {}
                 });
@@ -1753,6 +1909,8 @@ pub fn run() {
             context_usage,
             get_snippets,
             save_snippets,
+            get_requirements,
+            save_requirements,
             claude_usage,
             get_auto_hello,
             set_auto_hello,
@@ -1760,6 +1918,8 @@ pub fn run() {
             oauth_usage,
             has_npx,
             open_url,
+            open_log,
+            app_log,
             claude_hello_now
         ])
         .run(tauri::generate_context!())
@@ -1811,9 +1971,11 @@ mod tests {
             projects: vec![],
             servers: vec![],
             snippets: vec![],
+            requirements: vec![],
             data_path: data_path.clone(),
             server_path: dir.join("servers.json"),
             snippet_path: dir.join("snippets.json"),
+            requirement_path: dir.join("requirements.json"),
         };
 
         let now = "2025-01-01 00:00:00".to_string();

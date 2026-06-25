@@ -6,9 +6,22 @@ try {
   throw e;
 }
 
+// 把前端日志/未捕获异常转发到后端统一的 app.log（排查问题用）。
+function appLog(level, msg) {
+  try { invoke('app_log', { level, msg: String(msg) }); } catch (_) {}
+}
+window.addEventListener('error', e => {
+  appLog('error', `JS 错误：${e.message} @ ${e.filename}:${e.lineno}:${e.colno}`);
+});
+window.addEventListener('unhandledrejection', e => {
+  const r = e.reason;
+  appLog('error', `未处理的 Promise 拒绝：${(r && r.message) ? r.message : r}`);
+});
+
 let projects = [];
 let servers = [];
 let snippets = [];
+let requirements = [];
 let currentEditId = null;
 let pendingConfirm = null;
 let activeGroup = 'all';
@@ -118,11 +131,14 @@ async function load() {
     projects = await invoke('get_projects');
     servers = await invoke('get_servers');
     try { snippets = await invoke('get_snippets'); } catch (_) { snippets = []; }
+    try { requirements = await invoke('get_requirements'); } catch (_) { requirements = []; }
     renderGroups();
     render(projects);
     el.countAll.textContent = projects.length;
+    updateReqBadge();
   } catch (e) {
     console.error('加载失败:', e);
+    appLog('error', '初始数据加载失败：' + (e.message || e));
     msg('加载失败: ' + (e.message || e), 'error');
   }
 }
@@ -414,7 +430,21 @@ function bind() {
     filterAndRender();
   };
 
-  document.onkeydown = e => { if (e.key === 'Escape') { closeModal(); closeDel(); closeServerModal(); closeServerList(); } };
+  // 需求清单
+  $('req-entry').onclick = (e) => { e.preventDefault(); openReqModal(); };
+  $('req-modal-close').onclick = closeReqModal;
+  $('req-modal-overlay').onclick = e => { if (e.target === $('req-modal-overlay')) closeReqModal(); };
+  $('req-add-btn').onclick = addRequirement;
+  $('req-input').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addRequirement(); } });
+  $('req-tabs').querySelectorAll('.req-tab').forEach(tab => {
+    tab.onclick = () => {
+      reqFilter = tab.dataset.filter;
+      $('req-tabs').querySelectorAll('.req-tab').forEach(t => t.classList.toggle('active', t === tab));
+      renderReqList();
+    };
+  });
+
+  document.onkeydown = e => { if (e.key === 'Escape') { closeModal(); closeDel(); closeServerModal(); closeServerList(); closeReqModal(); } };
 
   // 运行环境切换时显示/隐藏服务器选择
   el.machine.onchange = () => {
@@ -1053,11 +1083,26 @@ function renderOAuth(o) {
     return;
   }
   const plan = o.plan ? ` · ${esc(o.plan)}` : '';
-  const stale = o.stale ? ' <span class="usage-stale">缓存</span>' : '';
+  const age = `<span class="usage-age">${esc(fmtUsageAge(o.ageSecs))}</span>`;
+  const staleWarn = o.stale
+    ? `<div class="usage-stale-warn">⚠ 实时刷新失败，下面是旧数据${o.error ? '：' + esc(o.error) : ''}</div>`
+    : '';
   el.innerHTML =
-    `<div class="usage-oauth-head">限流用量${plan}${stale}</div>` +
+    `<div class="usage-oauth-head">限流用量${plan}${age}</div>` +
+    staleWarn +
     oauthRow('5 小时窗口', o.fiveHour) +
     oauthRow('7 天窗口', o.sevenDay);
+}
+// 数据年龄文案（OAuth 限流用量底部"X 分钟前更新"）。
+function fmtUsageAge(secs) {
+  secs = Number(secs) || 0;
+  if (secs < 5) return '刚刚更新';
+  if (secs < 60) return `${secs} 秒前更新`;
+  const m = Math.floor(secs / 60);
+  if (m < 60) return `${m} 分钟前更新`;
+  const h = Math.floor(m / 60);
+  const rm = m % 60;
+  return `${h} 小时${rm ? ' ' + rm + ' 分' : ''}前更新`;
 }
 function oauthRow(label, w) {
   w = w || {};
@@ -1642,6 +1687,203 @@ function renderSnippetList() {
         msg('已删除', 'success');
       });
     };
+  });
+}
+
+// ===== 需求清单：碎片需求收集箱 =====
+let reqFilter = 'all';
+let reqEditId = null; // 正在行内编辑的需求 id
+
+const REQ_STATUS = {
+  todo:  { label: '待办',   next: 'doing' },
+  doing: { label: '进行中', next: 'done'  },
+  done:  { label: '已完成', next: 'todo'  },
+};
+const REQ_PRIORITY = { high: '重要', normal: '普通', low: '次要' };
+
+// 侧栏角标：未完成需求数
+function updateReqBadge() {
+  const badge = $('req-count');
+  if (!badge) return;
+  const n = requirements.filter(r => r.status !== 'done').length;
+  badge.textContent = n;
+  badge.style.display = n > 0 ? '' : 'none';
+}
+
+function reqProjectName(id) {
+  if (!id) return '';
+  const p = projects.find(x => x.id === id);
+  return p ? p.name : '';
+}
+
+function fillReqProjectSelect(sel, selectedId) {
+  if (!sel) return;
+  sel.innerHTML = ['<option value="">不关联项目</option>']
+    .concat(projects.map(p => `<option value="${escAttr(p.id)}">${esc(p.name)}</option>`))
+    .join('');
+  sel.value = selectedId || '';
+}
+
+function openReqModal() {
+  reqEditId = null;
+  fillReqProjectSelect($('req-project'), '');
+  $('req-input').value = '';
+  $('req-priority').value = 'normal';
+  renderReqList();
+  $('req-modal-overlay').classList.add('active');
+  setTimeout(() => $('req-input').focus(), 50);
+}
+function closeReqModal() { $('req-modal-overlay')?.classList.remove('active'); }
+
+async function persistRequirements() {
+  try { requirements = await invoke('save_requirements', { requirements }); }
+  catch (e) { msg('保存失败: ' + (e.message || e), 'error'); }
+  updateReqBadge();
+}
+
+async function addRequirement() {
+  const input = $('req-input');
+  const title = input.value.trim();
+  if (!title) { input.focus(); return; }
+  requirements.unshift({
+    id: '', title, note: '',
+    status: 'todo',
+    priority: $('req-priority').value || 'normal',
+    projectId: $('req-project').value || '',
+    createdAt: '', updatedAt: '',
+  });
+  input.value = '';
+  await persistRequirements();
+  renderReqList();
+  input.focus();
+}
+
+async function cycleReqStatus(r) {
+  r.status = REQ_STATUS[r.status]?.next || 'todo';
+  await persistRequirements();
+  renderReqList();
+}
+
+function reqCounts() {
+  const c = { all: requirements.length, todo: 0, doing: 0, done: 0 };
+  requirements.forEach(r => { c[r.status] = (c[r.status] || 0) + 1; });
+  return c;
+}
+
+function reqRowHtml(r) {
+  const st = REQ_STATUS[r.status] || REQ_STATUS.todo;
+  const pname = reqProjectName(r.projectId);
+  const time = (r.createdAt || '').slice(5, 16); // MM-DD HH:MM
+  return `
+  <div class="req-row${r.status === 'done' ? ' req-done' : ''}" data-id="${escAttr(r.id)}">
+    <button class="req-status req-status-${r.status}" title="点击切换：待办 → 进行中 → 已完成" data-act="cycle">
+      <span class="req-status-dot"></span><span class="req-status-label">${esc(st.label)}</span>
+    </button>
+    <div class="req-main">
+      <div class="req-title">${esc(r.title)}</div>
+      ${r.note ? `<div class="req-note">${esc(r.note)}</div>` : ''}
+      <div class="req-meta">
+        <span class="req-pri req-pri-${r.priority}">${esc(REQ_PRIORITY[r.priority] || '普通')}</span>
+        ${pname ? `<span class="req-tag" title="关联项目">${esc(pname)}</span>` : ''}
+        ${time ? `<span class="req-time">${esc(time)}</span>` : ''}
+      </div>
+    </div>
+    <div class="req-actions">
+      <button class="action-btn" data-act="edit" title="编辑">${SNIPPET_ICONS.edit}</button>
+      <button class="action-btn danger" data-act="del" title="删除">${SNIPPET_ICONS.del}</button>
+    </div>
+  </div>`;
+}
+
+function reqEditRowHtml(r) {
+  return `
+  <div class="req-row req-row-editing" data-id="${escAttr(r.id)}">
+    <div class="req-edit">
+      <input class="form-input" type="text" id="req-edit-title" value="${escAttr(r.title)}" maxlength="200" placeholder="需求标题" />
+      <textarea class="form-input" id="req-edit-note" rows="2" placeholder="补充说明（可空）">${esc(r.note || '')}</textarea>
+      <div class="req-edit-row">
+        <select class="form-select" id="req-edit-priority">
+          <option value="normal">普通</option>
+          <option value="high">重要</option>
+          <option value="low">次要</option>
+        </select>
+        <select class="form-select" id="req-edit-project"></select>
+        <span class="req-edit-spacer"></span>
+        <button class="btn btn-default btn-sm" data-act="cancel">取消</button>
+        <button class="btn btn-primary btn-sm" data-act="save">保存</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderReqList() {
+  const c = reqCounts();
+  $('req-c-all').textContent = c.all;
+  $('req-c-todo').textContent = c.todo;
+  $('req-c-doing').textContent = c.doing;
+  $('req-c-done').textContent = c.done;
+
+  const list = $('req-list');
+  const empty = $('req-empty');
+  const items = reqFilter === 'all' ? requirements : requirements.filter(r => r.status === reqFilter);
+
+  if (!items.length) {
+    list.style.display = 'none';
+    empty.style.display = '';
+    empty.textContent = requirements.length ? '该分类下暂无需求' : '还没有需求，在上方随手记一条吧';
+    return;
+  }
+  empty.style.display = 'none';
+  list.style.display = '';
+  list.innerHTML = items.map(r => reqEditId === r.id ? reqEditRowHtml(r) : reqRowHtml(r)).join('');
+
+  list.querySelectorAll('.req-row').forEach(row => {
+    const r = requirements.find(x => x.id === row.dataset.id);
+    if (!r) return;
+
+    if (reqEditId === r.id) {
+      $('req-edit-priority').value = r.priority || 'normal';
+      fillReqProjectSelect($('req-edit-project'), r.projectId);
+      const close = () => { reqEditId = null; renderReqList(); };
+      row.querySelector('[data-act="cancel"]').onclick = close;
+      row.querySelector('[data-act="save"]').onclick = async () => {
+        const t = $('req-edit-title').value.trim();
+        if (!t) { msg('标题不能为空', 'error'); $('req-edit-title').focus(); return; }
+        r.title = t;
+        r.note = $('req-edit-note').value.trim();
+        r.priority = $('req-edit-priority').value;
+        r.projectId = $('req-edit-project').value;
+        reqEditId = null;
+        await persistRequirements();
+        renderReqList();
+      };
+      $('req-edit-title').addEventListener('keydown', e => {
+        if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) row.querySelector('[data-act="save"]').click();
+      });
+      return;
+    }
+
+    row.querySelectorAll('[data-act]').forEach(elm => {
+      elm.onclick = (ev) => {
+        ev.stopPropagation();
+        const act = elm.dataset.act;
+        if (act === 'cycle') return cycleReqStatus(r);
+        if (act === 'edit') {
+          reqEditId = r.id;
+          renderReqList();
+          setTimeout(() => $('req-edit-title')?.focus(), 30);
+          return;
+        }
+        if (act === 'del') {
+          askConfirm('需求', r.title, async () => {
+            requirements = requirements.filter(x => x.id !== r.id);
+            await persistRequirements();
+            renderReqList();
+            msg('已删除', 'success');
+          });
+        }
+      };
+    });
   });
 }
 

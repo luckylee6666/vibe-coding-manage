@@ -131,21 +131,30 @@ pub fn fetch_usage() -> ClaudeUsage {
                 u.ok = true;
                 u
             }
-            Err(e) => ClaudeUsage {
+            Err(e) => {
+                crate::log_warn!("ccusage blocks 解析失败：{e}");
+                ClaudeUsage {
+                    ok: false,
+                    error: Some(format!("解析 ccusage 输出失败：{e}")),
+                    ..Default::default()
+                }
+            }
+        },
+        Err(e) => {
+            crate::log_warn!(
+                "ccusage blocks 运行失败：{}",
+                if e.is_empty() { "(无输出)" } else { e.as_str() }
+            );
+            ClaudeUsage {
                 ok: false,
-                error: Some(format!("解析 ccusage 输出失败：{e}")),
+                error: Some(if e.is_empty() {
+                    "无法运行 ccusage（确认已装 Node/npx，且用过 Claude Code）".to_string()
+                } else {
+                    e
+                }),
                 ..Default::default()
-            },
-        },
-        Err(e) => ClaudeUsage {
-            ok: false,
-            error: Some(if e.is_empty() {
-                "无法运行 ccusage（确认已装 Node/npx，且用过 Claude Code）".to_string()
-            } else {
-                e
-            }),
-            ..Default::default()
-        },
+            }
+        }
     }
 }
 
@@ -299,23 +308,32 @@ pub fn fetch_agent_weekly(agent: &str) -> AgentWeekly {
                 w.agent = agent.to_string();
                 w
             }
-            Err(e) => AgentWeekly {
+            Err(e) => {
+                crate::log_warn!("ccusage {agent} 周用量解析失败：{e}");
+                AgentWeekly {
+                    ok: false,
+                    agent: agent.to_string(),
+                    error: Some(format!("解析 ccusage 输出失败：{e}")),
+                    ..Default::default()
+                }
+            }
+        },
+        Err(e) => {
+            crate::log_warn!(
+                "ccusage {agent} 周用量运行失败：{}",
+                if e.is_empty() { "(无输出)" } else { e.as_str() }
+            );
+            AgentWeekly {
                 ok: false,
                 agent: agent.to_string(),
-                error: Some(format!("解析 ccusage 输出失败：{e}")),
+                error: Some(if e.is_empty() {
+                    format!("无法运行 ccusage（确认装了 Node/npx，且用过 {agent}）")
+                } else {
+                    e
+                }),
                 ..Default::default()
-            },
-        },
-        Err(e) => AgentWeekly {
-            ok: false,
-            agent: agent.to_string(),
-            error: Some(if e.is_empty() {
-                format!("无法运行 ccusage（确认装了 Node/npx，且用过 {agent}）")
-            } else {
-                e
-            }),
-            ..Default::default()
-        },
+            }
+        }
     }
 }
 
@@ -394,7 +412,7 @@ pub fn has_npx() -> bool {
 pub fn fire_hello() -> Result<String, String> {
     // 进 HOME 跑，避免落在某个奇怪 cwd；输入接 /dev/null 防止它等输入
     let script = "cd \"$HOME\"; claude -p \"hello\" </dev/null 2>&1";
-    run_shell(script, 120).map(|out| {
+    let r = run_shell(script, 120).map(|out| {
         // 滤掉交互式 shell 启动噪声行（如 .zshrc 打印的 "Restored session:"）
         out.lines()
             .filter(|l| !l.trim_start().starts_with("Restored session"))
@@ -402,7 +420,12 @@ pub fn fire_hello() -> Result<String, String> {
             .join("\n")
             .trim()
             .to_string()
-    })
+    });
+    match &r {
+        Ok(_) => crate::log_info!("自动 hello 成功（已开新 5h 窗口）"),
+        Err(e) => crate::log_warn!("自动 hello 失败：{e}"),
+    }
+    r
 }
 
 /// 后台轮询：推用量给前端 + 在窗口重置时自动 hello。
@@ -483,6 +506,9 @@ pub struct OAuthUsage {
     pub plan: Option<String>,
     /// true = 这是过期缓存（实时请求失败时回退）
     pub stale: bool,
+    /// 数据年龄（秒）。0 = 刚实时拉取。用于显示"X 分钟前更新"并判断是否冻结。
+    #[serde(default)]
+    pub age_secs: u64,
 }
 
 fn now_ms() -> u64 {
@@ -581,27 +607,42 @@ fn read_oauth_token() -> Option<String> {
             }
         }
     }
+    crate::log_warn!("读取登录凭据失败：钥匙串未授权/无此项，且 ~/.claude/.credentials.json 不可用");
     None
 }
 
+/// curl 可执行路径。GUI 应用从访达/启动台拉起时 PATH 往往极简，裸 "curl" 可能找不到，
+/// 故 unix 下用绝对路径；Windows 系统自带 curl 在 PATH 里，用裸名。
+fn curl_bin() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "curl"
+    } else {
+        "/usr/bin/curl"
+    }
+}
+
 /// 调用 oauth/usage 接口。token 走 curl 的 stdin 配置（-K -），不进 argv（避免 ps 泄露）。
+/// 出错时尽量带出真实原因（curl stderr / HTTP 状态码 / 响应片段），便于定位"静默不更新"。
 fn fetch_oauth_usage_raw(token: &str) -> Result<String, String> {
     use std::io::Write;
     use std::process::Stdio;
-    let mut child = std::process::Command::new("curl")
+    let bin = curl_bin();
+    let mut child = std::process::Command::new(bin)
         .args([
-            "-s",
+            "-sS",            // -S：即便 -s 也输出错误信息到 stderr
             "--max-time",
             "15",
+            "-w",
+            "\n%{http_code}", // 末行追加 HTTP 状态码，用于区分 200 / 401 / 5xx
             "-K",
             "-",
             "https://api.anthropic.com/api/oauth/usage",
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| format!("启动 curl 失败：{e}"))?;
+        .map_err(|e| format!("启动 curl 失败（{bin}）：{e}"))?;
     {
         let mut stdin = child.stdin.take().ok_or("无法写入 curl stdin")?;
         let cfg = format!(
@@ -614,10 +655,25 @@ fn fetch_oauth_usage_raw(token: &str) -> Result<String, String> {
     let out = child
         .wait_with_output()
         .map_err(|e| format!("等待 curl 失败：{e}"))?;
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
     if !out.status.success() {
-        return Err("usage API 请求失败（网络/curl）".to_string());
+        return Err(format!(
+            "curl 失败（exit {:?}）：{}",
+            out.status.code(),
+            stderr.trim()
+        ));
     }
-    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+    // stdout = 响应体 + "\n" + http_code（我们追加的末行）
+    let (body, code) = match stdout.rsplit_once('\n') {
+        Some((b, c)) => (b.to_string(), c.trim().to_string()),
+        None => (stdout.clone(), String::new()),
+    };
+    if code != "200" {
+        let snippet: String = body.trim().chars().take(200).collect();
+        return Err(format!("HTTP {code}：{snippet}"));
+    }
+    Ok(body)
 }
 
 fn parse_oauth_usage(json: &str) -> Result<OAuthUsage, String> {
@@ -655,22 +711,34 @@ fn parse_oauth_usage(json: &str) -> Result<OAuthUsage, String> {
     })
 }
 
-fn read_oauth_cache(ttl_ms: u64) -> Option<OAuthUsage> {
-    cache_read::<OAuthUsage>(&oauth_cache_path(), ttl_ms)
+/// 读 OAuth 缓存并返回 (数据, 年龄毫秒)。年龄用于判断新鲜度 + 显示"X 分钟前更新"。
+fn read_oauth_cache_with_age() -> Option<(OAuthUsage, u64)> {
+    let s = std::fs::read_to_string(oauth_cache_path()).ok()?;
+    let v: Value = serde_json::from_str(&s).ok()?;
+    let ts = v.get("ts").and_then(|x| x.as_u64())?;
+    let data: OAuthUsage = serde_json::from_value(v.get("data")?.clone()).ok()?;
+    Some((data, now_ms().saturating_sub(ts)))
 }
 fn write_oauth_cache(u: &OAuthUsage) {
     cache_write(&oauth_cache_path(), u);
 }
 
 /// 拉 OAuth 用量。60s 文件缓存命中则秒返；否则读 token → 调 API → 写缓存。
-/// 失败时回退到任意旧缓存（标 stale）。
+/// 失败时回退到任意旧缓存，并**带上真实失败原因 + 数据年龄**（标 stale），
+/// 避免把几小时前的旧值当现值静默显示。
 pub fn fetch_oauth_usage() -> OAuthUsage {
-    if let Some(c) = read_oauth_cache(60_000) {
-        return c;
+    // 60s 内的缓存视为新鲜，直接返回（附上年龄）。
+    if let Some((mut c, age)) = read_oauth_cache_with_age() {
+        if age <= 60_000 {
+            c.stale = false;
+            c.age_secs = age / 1000;
+            return c;
+        }
     }
     let token = match read_oauth_token() {
         Some(t) => t,
         None => {
+            crate::log_warn!("oauth 用量：未读到登录凭据（钥匙串/凭据文件均无），无法刷新");
             return OAuthUsage {
                 ok: false,
                 error: Some("未找到 Claude 登录凭据（需用 Claude Code 登录过；首次读取钥匙串会弹授权）".to_string()),
@@ -679,13 +747,24 @@ pub fn fetch_oauth_usage() -> OAuthUsage {
         }
     };
     match fetch_oauth_usage_raw(&token).and_then(|j| parse_oauth_usage(&j)) {
-        Ok(u) => {
+        Ok(mut u) => {
+            u.stale = false;
+            u.age_secs = 0;
             write_oauth_cache(&u);
+            crate::log_info!(
+                "oauth 用量已刷新：5h {}% · 周 {}%",
+                u.five_hour.utilization.round() as i64,
+                u.seven_day.utilization.round() as i64
+            );
             u
         }
         Err(e) => {
-            if let Some(mut c) = read_oauth_cache(u64::MAX) {
+            // 记真实失败原因，便于排查"为何不更新"
+            crate::log_warn!("oauth 用量刷新失败，回退旧缓存：{e}");
+            if let Some((mut c, age)) = read_oauth_cache_with_age() {
                 c.stale = true;
+                c.age_secs = age / 1000;
+                c.error = Some(e); // 携带真实原因供面板显示
                 return c;
             }
             OAuthUsage {
