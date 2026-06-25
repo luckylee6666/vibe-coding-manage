@@ -711,6 +711,7 @@ fn parse_oauth_usage(json: &str) -> Result<OAuthUsage, String> {
         seven_day: win("seven_day"),
         plan: v.get("plan").and_then(|x| x.as_str()).map(|s| s.to_string()),
         stale: false,
+        age_secs: 0,
     })
 }
 

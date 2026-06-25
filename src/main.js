@@ -143,6 +143,7 @@ async function load() {
     render(projects);
     el.countAll.textContent = projects.length;
     updateReqBadge();
+    renderSnippetQuick();
   } catch (e) {
     console.error('加载失败:', e);
     appLog('error', '初始数据加载失败：' + (e.message || e));
@@ -519,6 +520,9 @@ function bind() {
   applyBellState();
   // Prompt 片段库
   termEl.snippetBtn.onclick = (ev) => { ev.stopPropagation(); toggleSnippetMenu(ev.currentTarget); };
+  // 片段快捷浮层：展开/收起（记忆状态）
+  $('snippet-quick-fab').onclick = () => { localStorage.setItem('snippet-quick-collapsed', '0'); $('snippet-quick').classList.remove('collapsed'); };
+  $('snippet-quick-collapse').onclick = () => { localStorage.setItem('snippet-quick-collapsed', '1'); $('snippet-quick').classList.add('collapsed'); };
   $('snippet-modal-close').onclick = closeSnippetModal;
   $('snippet-modal-overlay').onclick = e => { if (e.target === $('snippet-modal-overlay')) closeSnippetModal(); };
   $('snippet-save-btn').onclick = saveSnippetFromEditor;
@@ -1608,14 +1612,16 @@ function renderSnippetMenu() {
   });
 }
 
-async function injectSnippet(content) {
+async function injectSnippet(content, send = false) {
   if (!content) return;
   let id = activeSession;
   if (!id || !sessions.has(id)) {
     id = await createSession({}); // 没有活动终端就先开一个空白的
   }
   openDock();
-  try { await invoke('terminal_write', { id, data: content }); }
+  // send=true：注入后追加回车（\r）直接发送；先去掉结尾换行，避免多发空行
+  const data = send ? content.replace(/[\r\n]+$/, '') + '\r' : content;
+  try { await invoke('terminal_write', { id, data }); }
   catch (e) { msg('注入失败: ' + (e.message || e), 'error'); return; }
   sessions.get(id)?.term.focus();
 }
@@ -1659,9 +1665,34 @@ async function saveSnippetFromEditor() {
   renderSnippetList();
   msg('已保存', 'success');
 }
-async function persistSnippets() {
-  try { snippets = await invoke('save_snippets', { snippets }); }
-  catch (e) { msg('保存失败: ' + (e.message || e), 'error'); }
+// 串行化保存（同 persistRequirements），避免快速增改时整表快照乱序覆盖。
+let snippetSaveChain = Promise.resolve();
+function persistSnippets() {
+  snippetSaveChain = snippetSaveChain.then(async () => {
+    try { snippets = await invoke('save_snippets', { snippets }); }
+    catch (e) { msg('保存失败: ' + (e.message || e), 'error'); }
+    renderSnippetQuick();
+  });
+  return snippetSaveChain;
+}
+
+// 终端右下角片段快捷浮层：列出片段卡片，单击即注入并回车。无片段时整体隐藏。
+function renderSnippetQuick() {
+  const root = $('snippet-quick');
+  if (!root) return;
+  if (!snippets.length) { root.style.display = 'none'; return; }
+  root.style.display = '';
+  root.classList.toggle('collapsed', localStorage.getItem('snippet-quick-collapsed') === '1');
+  const cards = $('snippet-quick-cards');
+  cards.innerHTML = snippets.map(s =>
+    `<button class="snippet-quick-card" data-id="${escAttr(s.id)}" title="${escAttr(s.content)}">${esc(s.title)}</button>`
+  ).join('');
+  cards.querySelectorAll('.snippet-quick-card').forEach(btn => {
+    btn.onclick = () => {
+      const s = snippets.find(x => x.id === btn.dataset.id);
+      if (s) injectSnippet(s.content, true); // true = 注入并回车
+    };
+  });
 }
 function renderSnippetList() {
   const list = $('snippet-list');
@@ -1742,10 +1773,15 @@ function openReqModal() {
 }
 function closeReqModal() { $('req-modal-overlay')?.classList.remove('active'); }
 
-async function persistRequirements() {
-  try { requirements = await invoke('save_requirements', { requirements }); }
-  catch (e) { msg('保存失败: ' + (e.message || e), 'error'); }
-  updateReqBadge();
+// 串行化保存：连续快速增改时，避免两次保存的整表快照乱序覆盖、把刚记的项挤掉。
+let reqSaveChain = Promise.resolve();
+function persistRequirements() {
+  reqSaveChain = reqSaveChain.then(async () => {
+    try { requirements = await invoke('save_requirements', { requirements }); }
+    catch (e) { msg('保存失败: ' + (e.message || e), 'error'); }
+    updateReqBadge();
+  });
+  return reqSaveChain;
 }
 
 async function addRequirement() {

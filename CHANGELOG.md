@@ -2,6 +2,36 @@
 
 All notable changes to this project are documented here. 本项目的更新记录如下。
 
+## v1.2.6
+
+### English
+
+**Added**
+- **Requirements list**: a lightweight inbox for the stray feature ideas you jot down while coding. A "Requirements" entry in the sidebar (with an open-count badge) opens a quick-capture box — type and press Enter to save — plus To-do / Doing / Done filters, inline editing, priority, and optional project tagging. Stored in `requirements.json`.
+- **Floating snippet quick-panel**: a collapsible card panel in the bottom-right of the terminal lists your snippets; a single click injects one **and presses Enter** (one-click send — no dropdown step, no manual Enter). Collapses to a small button; the state is remembered.
+- **Global app log**: a built-in file log (`logs/app.log`, ~1 MB rotation) records startup, usage refreshes, ccusage/auto-hello, data writes, terminal/remote-server lifecycle, and uncaught front-end errors — never tokens or PINs. A tray **"Open log"** item opens it.
+
+**Fixed**
+- **Rate-limit usage froze / showed a stale value**: when the periodic refresh failed, the app silently kept showing an hours-old cached number as if it were current. Now the tray marks stale data (`⚠`), the panel shows "updated X min ago" plus the real failure reason, the usage request no longer swallows its error (it captures curl stderr + HTTP status), and `curl` is invoked by absolute path so a minimal launch PATH can't break it.
+
+**Hardened**
+- **Atomic data writes**: all data files (projects / servers / snippets / requirements) are now written via temp-file + rename, so a crash mid-write can no longer corrupt the whole file. A file that fails to parse on load is backed up to `*.bad` before falling back, instead of being silently overwritten.
+- **Serialized saves**: rapid successive edits to snippets/requirements can no longer drop a just-added item due to out-of-order save responses.
+
+### 中文
+
+**新增**
+- **需求清单**：写代码时随口冒出的碎片需求/想法，有个轻量收集箱。侧栏「需求清单」入口（带未完成角标）打开速记框——输入回车即存——外加 待办/进行中/已完成 过滤、行内编辑、优先级、可选关联项目。数据存 `requirements.json`。
+- **片段快捷悬浮面板**：终端右下角可收起的卡片浮层列出你的片段；**单击一条 = 注入并自动回车**（一次点击直接发送，免开下拉、免手按回车）。可收成小按钮，状态记住。
+- **全局应用日志**：内置文件日志（`logs/app.log`，约 1MB 滚动），记录启动、用量刷新、ccusage/自动 hello、数据写入、终端/手机服务生命周期、前端未捕获异常——绝不记 token/PIN。托盘新增**「打开日志」**。
+
+**修复**
+- **限流用量冻住 / 显示旧值**：之前定时刷新一旦失败，会静默地继续把几小时前的缓存当现值显示。现在：托盘对过期数据加 `⚠`、面板显示「X 分钟前更新」+ 真实失败原因、用量请求不再吞错误（抓 curl stderr + HTTP 状态码）、`curl` 用绝对路径调用以免精简 PATH 下找不到。
+
+**加固**
+- **数据原子写**：所有数据文件（项目/服务器/片段/需求）改为临时文件 + rename 写入，写入中途崩溃不会损坏整个文件。加载时解析失败的文件会先备份成 `*.bad` 再回退，而非静默覆盖。
+- **保存串行化**：连续快速增改片段/需求时，不再因保存响应乱序而把刚加的项挤掉。
+
 ## v1.2.5
 
 ### English

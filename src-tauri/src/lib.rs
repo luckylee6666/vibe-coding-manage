@@ -110,6 +110,50 @@ struct AppState {
     requirement_path: PathBuf,
 }
 
+/// 原子写：写同目录临时文件 + fsync，再 rename 覆盖目标。
+/// rename 在同一分区是原子操作——崩溃/断电后要么是旧文件、要么是新文件，
+/// 绝不会出现写到一半的半截文件（旧版 fs::write 先清空再写，中途被 kill 会损坏整文件）。
+fn atomic_write(path: &PathBuf, data: &[u8]) -> std::io::Result<()> {
+    let tmp = path.with_extension("tmp");
+    {
+        let mut f = fs::File::create(&tmp)?;
+        f.write_all(data)?;
+        f.sync_all()?;
+    }
+    fs::rename(&tmp, path)
+}
+
+/// 加载 JSON 数据。解析失败时把损坏文件备份成 `*.bad`（避免随后的保存把它覆盖、
+/// 导致可恢复的数据彻底丢失），再返回默认空值。空文件视为默认值、不报错。
+fn load_json_or_backup<T: serde::de::DeserializeOwned + Default>(path: &PathBuf) -> T {
+    if !path.exists() {
+        return T::default();
+    }
+    let data = match fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) => {
+            crate::log_error!("读取 {:?} 失败：{e}", path.file_name().unwrap_or_default());
+            return T::default();
+        }
+    };
+    if data.trim().is_empty() {
+        return T::default();
+    }
+    match serde_json::from_str::<T>(&data) {
+        Ok(v) => v,
+        Err(e) => {
+            let bad = path.with_extension("bad");
+            let _ = fs::copy(path, &bad);
+            crate::log_error!(
+                "解析 {:?} 失败：{e}；已备份损坏文件到 {:?}",
+                path.file_name().unwrap_or_default(),
+                bad.file_name().unwrap_or_default()
+            );
+            T::default()
+        }
+    }
+}
+
 impl AppState {
     fn new() -> Self {
         let data_dir = dirs::data_dir()
@@ -119,36 +163,16 @@ impl AppState {
         fs::create_dir_all(&data_dir).ok();
         
         let data_path = data_dir.join("projects.json");
-        let projects = if data_path.exists() {
-            let data = fs::read_to_string(&data_path).unwrap_or_default();
-            serde_json::from_str(&data).unwrap_or_default()
-        } else {
-            Vec::new()
-        };
+        let projects = load_json_or_backup(&data_path);
 
         let server_path = data_dir.join("servers.json");
-        let servers = if server_path.exists() {
-            let data = fs::read_to_string(&server_path).unwrap_or_default();
-            serde_json::from_str(&data).unwrap_or_default()
-        } else {
-            Vec::new()
-        };
+        let servers = load_json_or_backup(&server_path);
 
         let snippet_path = data_dir.join("snippets.json");
-        let snippets = if snippet_path.exists() {
-            let data = fs::read_to_string(&snippet_path).unwrap_or_default();
-            serde_json::from_str(&data).unwrap_or_default()
-        } else {
-            Vec::new()
-        };
+        let snippets = load_json_or_backup(&snippet_path);
 
         let requirement_path = data_dir.join("requirements.json");
-        let requirements = if requirement_path.exists() {
-            let data = fs::read_to_string(&requirement_path).unwrap_or_default();
-            serde_json::from_str(&data).unwrap_or_default()
-        } else {
-            Vec::new()
-        };
+        let requirements = load_json_or_backup(&requirement_path);
 
         Self {
             projects,
@@ -165,7 +189,7 @@ impl AppState {
     fn save_projects(&self) -> Result<(), String> {
         let data = serde_json::to_string_pretty(&self.projects)
             .map_err(|e| e.to_string())?;
-        fs::write(&self.data_path, data).map_err(|e| {
+        atomic_write(&self.data_path, data.as_bytes()).map_err(|e| {
             crate::log_error!("写 projects.json 失败：{e}");
             e.to_string()
         })
@@ -174,7 +198,7 @@ impl AppState {
     fn save_servers(&self) -> Result<(), String> {
         let data = serde_json::to_string_pretty(&self.servers)
             .map_err(|e| e.to_string())?;
-        fs::write(&self.server_path, data).map_err(|e| {
+        atomic_write(&self.server_path, data.as_bytes()).map_err(|e| {
             crate::log_error!("写 servers.json 失败：{e}");
             e.to_string()
         })
@@ -183,7 +207,7 @@ impl AppState {
     fn save_snippets(&self) -> Result<(), String> {
         let data = serde_json::to_string_pretty(&self.snippets)
             .map_err(|e| e.to_string())?;
-        fs::write(&self.snippet_path, data).map_err(|e| {
+        atomic_write(&self.snippet_path, data.as_bytes()).map_err(|e| {
             crate::log_error!("写 snippets.json 失败：{e}");
             e.to_string()
         })
@@ -192,7 +216,7 @@ impl AppState {
     fn save_requirements(&self) -> Result<(), String> {
         let data = serde_json::to_string_pretty(&self.requirements)
             .map_err(|e| e.to_string())?;
-        fs::write(&self.requirement_path, data).map_err(|e| {
+        atomic_write(&self.requirement_path, data.as_bytes()).map_err(|e| {
             crate::log_error!("写 requirements.json 失败：{e}");
             e.to_string()
         })

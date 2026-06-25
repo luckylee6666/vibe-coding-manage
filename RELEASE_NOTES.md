@@ -1,23 +1,21 @@
 Cross-platform desktop app: macOS (Apple Silicon) + Windows (x64 / ARM64)
 跨平台桌面版：macOS (Apple Silicon) + Windows (x64 / ARM64)
 
-## What's new in v1.2.5 / 本版更新
+## What's new in v1.2.6 / 本版更新
 
 **English**
-- **Session attention + notifications**: get a desktop notification + chime (and an amber pulsing tab dot) when an AI CLI goes quiet after working — i.e. it finished or is waiting for you. Toggle via the toolbar bell.
-- **Rate-limit usage (no Node needed)**: the Claude usage panel and a new **menu-bar tray** show your real 5h / 7d limit utilization (% + reset countdown) — same source as `/usage`, read from the Keychain token (first read prompts a Keychain authorization).
-- **Context % on terminal tabs**: each Claude tab shows its context-window fill; window size is read from Claude Code's startup banner so it's right on 1M and 200K plans.
-- **Git status badges** on project cards (branch / changes / ahead-behind) and a **"restore context"** card (git overview + recent commits + changed files + CLAUDE.md summary).
-- **Session restore** (re-open last tab layout; Claude with `--continue`) and a **Prompt/snippet library** to inject reusable prompts.
-- Cost stats / Codex / OpenCode views still use `ccusage` (via `npx`); without Node they degrade gracefully with a one-click install hint — the rate-limit usage keeps working.
+- **Requirements list**: a lightweight inbox for the stray feature ideas you jot down while coding — a sidebar "Requirements" entry (with an open-count badge) opens a quick-capture box (type + Enter to save), with To-do / Doing / Done filters, inline editing, priority, and optional project tagging.
+- **Floating snippet quick-panel**: a collapsible card panel in the bottom-right of the terminal — a single click injects a snippet **and presses Enter** (one-click send, no dropdown step, no manual Enter).
+- **Rate-limit usage fix**: the tray/panel could freeze on an hours-old value when a refresh silently failed. It now marks stale data (`⚠`), shows "updated X min ago" + the real failure reason, surfaces the actual error (curl stderr + HTTP status), and calls `curl` by absolute path.
+- **Global app log** (`logs/app.log`) for easy troubleshooting — startup, usage refreshes, data writes, terminal/remote lifecycle, uncaught front-end errors (never tokens/PINs); open it from the tray's **"Open log"**.
+- **Hardened storage**: atomic data writes (temp + rename, no half-written corruption) with `*.bad` backup of unparseable files; serialized saves so rapid edits can't drop an item.
 
 **中文**
-- **会话状态感知 + 通知**：AI CLI 干完活后突然安静（跑完/在等你）时，弹桌面通知 + 提示音 + 标签琥珀呼吸点；工具栏铃铛可开关。
-- **限流用量（无需 Node）**：Claude 用量面板和新增的**菜单栏托盘**显示真实 5h / 7d 限流使用率（百分比 + 重置倒计时）——和 `/usage` 同源，读钥匙串 token（首次弹钥匙串授权）。
-- **终端标签上下文 %**：每个 Claude 标签显示上下文窗口占用；窗口大小读 Claude Code 启动横幅，1M 和 200K 套餐都准。
-- 项目卡片 **Git 状态徽标**（分支/改动/领先落后）和**「恢复现场」**卡片（git 概览 + 最近提交 + 改动文件 + CLAUDE.md 摘要）。
-- **会话恢复**（重开上次标签布局；Claude 用 `--continue`）和 **Prompt 片段库**（一键注入常用指令）。
-- 花费统计 / Codex / OpenCode 仍走 `ccusage`（经 `npx`）；没装 Node 时优雅降级 + 一键安装引导，限流用量照常工作。
+- **需求清单**：写代码时随口冒出的碎片需求/想法的轻量收集箱——侧栏「需求清单」入口（带未完成角标）打开速记框（输入回车即存），含 待办/进行中/已完成 过滤、行内编辑、优先级、可选关联项目。
+- **片段快捷悬浮面板**：终端右下角可收起的卡片浮层——**单击一条 = 注入并自动回车**（一次点击直接发送，免开下拉、免手按回车）。
+- **限流用量修复**：刷新静默失败时，托盘/面板会冻在几小时前的旧值。现在对过期数据加 `⚠`、显示「X 分钟前更新」+ 真实失败原因、抓出实际错误（curl stderr + HTTP 状态码），并用绝对路径调用 `curl`。
+- **全局应用日志**（`logs/app.log`）便于排查——记录启动、用量刷新、数据写入、终端/手机服务生命周期、前端未捕获异常（绝不记 token/PIN）；从托盘**「打开日志」**打开。
+- **存储加固**：数据原子写（临时文件 + rename，杜绝半截文件损坏）+ 解析失败文件备份为 `*.bad`；保存串行化，连续快速增改不丢条目。
 
 ## Install / 安装
 

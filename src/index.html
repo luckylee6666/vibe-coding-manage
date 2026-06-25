@@ -417,6 +417,21 @@
               <iframe class="file-preview-pdf" id="file-preview-pdf" title="PDF 预览"></iframe>
             </div>
           </div>
+          <!-- 片段快捷悬浮面板：卡片单击 = 注入并回车 -->
+          <div class="snippet-quick collapsed" id="snippet-quick" style="display:none;">
+            <button class="snippet-quick-fab" id="snippet-quick-fab" title="片段快捷（单击即注入并回车）">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><path d="M9 5a2 2 0 012-2h2a2 2 0 012 2 2 2 0 01-2 2h-2a2 2 0 01-2-2z"/><path d="M9 12h6M9 16h4"/></svg>
+            </button>
+            <div class="snippet-quick-panel">
+              <div class="snippet-quick-head">
+                <span class="snippet-quick-title">片段 · 单击即发送</span>
+                <button class="snippet-quick-collapse" id="snippet-quick-collapse" title="收起">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg>
+                </button>
+              </div>
+              <div class="snippet-quick-cards" id="snippet-quick-cards"></div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
