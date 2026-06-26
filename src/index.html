@@ -232,19 +232,6 @@
             <div class="usage-body" id="usage-body">
               <div class="usage-loading">查询中…</div>
             </div>
-            <div class="usage-auto" id="usage-auto">
-              <label class="usage-auto-row">
-                <span class="usage-auto-text">
-                  <b>窗口重置后自动 hello</b>
-                  <small>5 小时窗口结束后自动发一句 hello，立刻开新窗口、重新计时</small>
-                </span>
-                <span class="usage-switch">
-                  <input type="checkbox" id="usage-auto-hello" />
-                  <span class="usage-switch-slider"></span>
-                </span>
-              </label>
-              <button class="btn btn-default btn-xs" id="usage-hello-now">立刻发一次 hello</button>
-            </div>
           </div>
           <div class="modal-footer">
             <button class="btn btn-default" id="usage-refresh">刷新</button>
@@ -495,6 +482,21 @@
             <div class="snippet-editor">
               <input class="form-input" type="text" id="snippet-title" placeholder="标题（如：更新记忆）" maxlength="60" />
               <textarea class="form-input" id="snippet-content" rows="4" placeholder="片段内容，点击时注入到当前终端（不自动回车，可先检查再发送）"></textarea>
+              <div class="snippet-sched-row">
+                <span class="snippet-sched-label">🕐 定时发送</span>
+                <select class="form-select" id="snippet-sched-mode">
+                  <option value="">不定时</option>
+                  <option value="interval">间隔重复</option>
+                  <option value="daily">每天定时</option>
+                </select>
+                <span class="snippet-sched-field" id="snippet-sched-interval" style="display:none;">
+                  每 <input class="form-input" type="number" id="snippet-sched-min" min="1" max="1440" value="30" /> 分钟
+                </span>
+                <span class="snippet-sched-field" id="snippet-sched-daily" style="display:none;">
+                  每天 <input class="form-input" type="time" id="snippet-sched-time" value="09:00" />
+                </span>
+                <span class="snippet-sched-hint" id="snippet-sched-hint">到点自动注入当前终端并回车</span>
+              </div>
               <div class="snippet-editor-actions">
                 <span class="snippet-edit-hint" id="snippet-edit-hint"></span>
                 <button class="btn btn-default btn-sm" id="snippet-clear-btn">清空</button>

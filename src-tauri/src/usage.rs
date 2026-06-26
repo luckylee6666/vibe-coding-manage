@@ -1,20 +1,13 @@
-//! Claude 用量查询 + 5 小时窗口「自动 hello」重置计时。
+//! Claude 用量查询（5 小时窗口 / 限流用量）。
 //!
 //! 数据源：社区工具 `ccusage`（读 ~/.claude/projects 下的 JSONL 本地日志，不联网传数据），
 //! 取 `ccusage blocks --json` 里 `isActive` 的那一块——即当前 5 小时计费窗口，
 //! 含起止时间、花费、token、燃烧速率、预测。
-//!
-//! 自动 hello：后台轮询，发现「无活跃窗口」（即上一个 5h 窗口已重置 / 长时间没用）时，
-//! 自动跑一次 `claude -p hello` 触发一次极小请求，立刻开一个新的 5h 窗口——
-//! 保证计时从你想要的时刻重新开始，不浪费窗口。
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Emitter, Manager};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// 当前 5 小时窗口的用量快照，推给前端展示。
 #[derive(Serialize, Deserialize, Clone, Default)]
@@ -39,44 +32,6 @@ pub struct ClaudeUsage {
     pub projected_cost: Option<f64>,
     /// 燃烧速率（美元/小时）
     pub cost_per_hour: Option<f64>,
-    /// 自动 hello 开关当前状态（顺带回传，省一次 IPC）
-    pub auto_hello: bool,
-}
-
-/// 自动 hello 设置 + 运行态。
-pub struct UsageState {
-    pub auto_hello: AtomicBool,
-    settings_path: PathBuf,
-    /// 上次触发 hello 的时刻，去重用（同一空闲期只触发一次）
-    last_fired: Mutex<Option<Instant>>,
-}
-
-impl UsageState {
-    pub fn load() -> Self {
-        let path = dirs::data_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("vibe-coding-manage")
-            .join("usage-settings.json");
-        let auto = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|s| serde_json::from_str::<Value>(&s).ok())
-            .and_then(|v| v.get("autoHello").and_then(|b| b.as_bool()))
-            .unwrap_or(false);
-        Self {
-            auto_hello: AtomicBool::new(auto),
-            settings_path: path,
-            last_fired: Mutex::new(None),
-        }
-    }
-
-    pub fn save(&self) -> Result<(), String> {
-        let v = serde_json::json!({ "autoHello": self.auto_hello.load(Ordering::Relaxed) });
-        std::fs::write(
-            &self.settings_path,
-            serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?,
-        )
-        .map_err(|e| e.to_string())
-    }
 }
 
 /// 经「交互式登录」shell 跑一条命令，继承用户完整 PATH
@@ -408,78 +363,6 @@ pub fn has_npx() -> bool {
         .unwrap_or(false)
 }
 
-/// 触发一次 `claude -p hello`，开一个新 5h 窗口。返回 claude 的输出（成功时）。
-pub fn fire_hello() -> Result<String, String> {
-    // 进 HOME 跑，避免落在某个奇怪 cwd；输入接 /dev/null 防止它等输入
-    let script = "cd \"$HOME\"; claude -p \"hello\" </dev/null 2>&1";
-    let r = run_shell(script, 120).map(|out| {
-        // 滤掉交互式 shell 启动噪声行（如 .zshrc 打印的 "Restored session:"）
-        out.lines()
-            .filter(|l| !l.trim_start().starts_with("Restored session"))
-            .collect::<Vec<_>>()
-            .join("\n")
-            .trim()
-            .to_string()
-    });
-    match &r {
-        Ok(_) => crate::log_info!("自动 hello 成功（已开新 5h 窗口）"),
-        Err(e) => crate::log_warn!("自动 hello 失败：{e}"),
-    }
-    r
-}
-
-/// 后台轮询：推用量给前端 + 在窗口重置时自动 hello。
-pub fn poller(app: AppHandle) {
-    loop {
-        let state = app.state::<UsageState>();
-        let enabled = state.auto_hello.load(Ordering::Relaxed);
-
-        // 没开自动 hello 时不必频繁跑 ccusage（前端开面板时会自己按需拉）
-        if !enabled {
-            std::thread::sleep(Duration::from_secs(60));
-            continue;
-        }
-
-        let mut usage = fetch_usage();
-        usage.auto_hello = true;
-        // 顺手刷新面板缓存，让前端开面板时吃到 poller 的新鲜数据
-        if usage.ok {
-            cache_write(&cache_file("ccusage-blocks-cache.json"), &usage);
-        }
-        let _ = app.emit("claude-usage", usage.clone());
-
-        if usage.ok && !usage.active {
-            // 窗口已重置 / 空闲：同一空闲期只触发一次（10 分钟去重）
-            let should = {
-                let mut last = state.last_fired.lock().unwrap();
-                let ok = last
-                    .map(|t| t.elapsed() > Duration::from_secs(600))
-                    .unwrap_or(true);
-                if ok {
-                    *last = Some(Instant::now());
-                }
-                ok
-            };
-            if should {
-                let _ = app.emit("claude-hello-firing", ());
-                let result = fire_hello();
-                let _ = app.emit(
-                    "claude-hello-fired",
-                    serde_json::json!({
-                        "ok": result.is_ok(),
-                        "detail": result.unwrap_or_else(|e| e),
-                    }),
-                );
-            }
-        } else if usage.active {
-            // 又有活跃窗口了，清掉去重标记，等下次重置可再触发
-            *state.last_fired.lock().unwrap() = None;
-        }
-
-        std::thread::sleep(Duration::from_secs(120));
-    }
-}
-
 // ============================================================================
 // OAuth 用量（限流窗口）：和 Claude Code 的 /usage 同一数据源
 // （GET api.anthropic.com/api/oauth/usage），给出 5h / 7d 的使用百分比 + 重置时间。
@@ -547,8 +430,6 @@ fn cache_write<T: Serialize>(path: &PathBuf, data: &T) {
 }
 
 /// 带缓存的 5h 窗口用量（面板用）：60s 内直接返缓存；否则实时拉并写缓存。
-/// 注意：后台 poller 仍走 fetch_usage() 实时版（要及时发现窗口重置触发 auto-hello），
-/// 但 poller 每轮会顺手刷新该缓存，让面板也吃到新鲜数据。
 pub fn fetch_usage_cached() -> ClaudeUsage {
     let path = cache_file("ccusage-blocks-cache.json");
     if let Some(c) = cache_read::<ClaudeUsage>(&path, 60_000) {

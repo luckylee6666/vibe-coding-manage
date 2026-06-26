@@ -107,7 +107,7 @@ async function init() {
   maybeRestoreSessions();
 }
 
-// 自动 hello / 用量后台事件（与终端是否打开无关，启动即监听）
+// 用量后台：探测 npx 是否可用 + 安装引导（与终端是否打开无关，启动即跑）
 async function bindUsageEvents() {
   // 后台探一次 npx 是否可用（决定花费/Codex/OpenCode 是否降级），结果缓存
   invoke('has_npx').then(v => { npxAvailable = v; }).catch(() => {});
@@ -117,20 +117,6 @@ async function bindUsageEvents() {
       invoke('open_url', { url: 'https://nodejs.org/' }).catch(() => {});
     }
   });
-  try {
-    const listen = window.__TAURI__.event.listen;
-    await listen('claude-usage', e => {
-      if ($('usage-overlay').classList.contains('active')) renderUsage(e.payload);
-    });
-    await listen('claude-hello-firing', () => {
-      msg('Claude 5 小时窗口已重置，正在自动发送 hello…', 'info');
-    });
-    await listen('claude-hello-fired', e => {
-      const p = e.payload || {};
-      if (p.ok) msg('已自动 hello，新的 5 小时窗口开始计时', 'success');
-      else msg('自动 hello 失败：' + (p.detail || '未知错误'), 'error');
-    });
-  } catch (e) { /* 非 Tauri 环境忽略 */ }
 }
 
 async function load() {
@@ -144,6 +130,7 @@ async function load() {
     el.countAll.textContent = projects.length;
     updateReqBadge();
     renderSnippetQuick();
+    startScheduler();
   } catch (e) {
     console.error('加载失败:', e);
     appLog('error', '初始数据加载失败：' + (e.message || e));
@@ -527,6 +514,7 @@ function bind() {
   $('snippet-modal-overlay').onclick = e => { if (e.target === $('snippet-modal-overlay')) closeSnippetModal(); };
   $('snippet-save-btn').onclick = saveSnippetFromEditor;
   $('snippet-clear-btn').onclick = clearSnippetEditor;
+  $('snippet-sched-mode').onchange = updateSnippetSchedFields;
   document.addEventListener('click', (e) => {
     if (!e.target.closest('#snippet-menu') && !e.target.closest('#terminal-snippet-btn')) closeSnippetMenu();
   });
@@ -555,25 +543,6 @@ function bind() {
     };
   });
   $('usage-overlay').onclick = e => { if (e.target === $('usage-overlay')) closeUsage(); };
-  $('usage-auto-hello').onchange = async (e) => {
-    try { await invoke('set_auto_hello', { enabled: e.target.checked }); }
-    catch (err) { msg('设置失败: ' + err, 'error'); e.target.checked = !e.target.checked; }
-  };
-  $('usage-hello-now').onclick = async () => {
-    const btn = $('usage-hello-now');
-    btn.disabled = true; btn.textContent = '发送中（约几秒）…';
-    try {
-      const reply = await invoke('claude_hello_now');
-      const snippet = String(reply || '').replace(/\s+/g, ' ').trim().slice(0, 50);
-      // 已有活跃窗口时只是往当前窗口加一次请求；窗口已重置时才是开新窗口
-      const sent = usageResetEpoch && Date.now() < usageResetEpoch
-        ? 'hello 已发送（当前窗口内）'
-        : 'hello 已发送，新的 5 小时窗口开始计时';
-      msg(`${sent}　claude：${snippet || '(空回复)'}`, 'success');
-      loadUsage();
-    } catch (err) { msg('发送失败: ' + err, 'error'); }
-    finally { btn.disabled = false; btn.textContent = '立刻发一次 hello'; }
-  };
   termEl.themeBtn.onclick = (e) => {
     e.stopPropagation();
     termEl.themeMenu.classList.contains('active') ? closeThemeMenu() : openThemeMenu();
@@ -970,7 +939,6 @@ const pad2 = (n) => String(n).padStart(2, '0');
 async function openUsage() {
   $('usage-overlay').classList.add('active');
   switchUsageTab('claude');
-  try { $('usage-auto-hello').checked = await invoke('get_auto_hello'); } catch {}
   loadUsage();
 }
 function closeUsage() {
@@ -978,13 +946,11 @@ function closeUsage() {
   stopUsageCountdown();
 }
 
-// 切 tab（不触发加载，仅改激活态 + 显隐自动 hello 区）。
+// 切 tab（不触发加载，仅改激活态）。
 function switchUsageTab(agent) {
   usageAgent = agent;
   document.querySelectorAll('.usage-tab').forEach(t =>
     t.classList.toggle('active', t.dataset.agent === agent));
-  // 「窗口重置后自动 hello」只对 Claude 有意义
-  $('usage-auto').style.display = agent === 'claude' ? '' : 'none';
 }
 
 async function loadUsage() {
@@ -1055,7 +1021,7 @@ function renderUsage(u) {
     usageResetEpoch = 0; stopUsageCountdown();
     body.innerHTML = `<div class="usage-window reset">` +
       `<div class="usage-window-top"><span class="usage-countdown">无活跃窗口</span></div>` +
-      `<div class="usage-reset-at">当前 5 小时窗口已重置 / 空闲。发一句 hello（或开启下方自动）即可立刻开新窗口。</div>` +
+      `<div class="usage-reset-at">当前 5 小时窗口已重置 / 空闲。在终端里用一次 Claude 即可开启新窗口。</div>` +
       `</div>` + weekly;
     return;
   }
@@ -1570,6 +1536,7 @@ const SNIPPET_ICONS = {
   inject: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 9l5 5 5-5M12 14V3"/></svg>',
   edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125"/></svg>',
   del: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166M18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/></svg>',
+  clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
 };
 function snippetPreview(text) {
   const t = (text || '').replace(/\s+/g, ' ').trim();
@@ -1640,6 +1607,7 @@ function clearSnippetEditor() {
   $('snippet-content').value = '';
   $('snippet-edit-hint').textContent = '';
   $('snippet-save-btn').textContent = '保存片段';
+  setSnippetSchedUI(null);
 }
 function loadSnippetIntoEditor(s) {
   snippetEditId = s.id;
@@ -1647,6 +1615,7 @@ function loadSnippetIntoEditor(s) {
   $('snippet-content').value = s.content;
   $('snippet-edit-hint').textContent = '编辑中：' + s.title;
   $('snippet-save-btn').textContent = '更新片段';
+  setSnippetSchedUI(s.schedule);
   $('snippet-title').focus();
 }
 async function saveSnippetFromEditor() {
@@ -1654,11 +1623,19 @@ async function saveSnippetFromEditor() {
   const content = $('snippet-content').value;
   if (!title) { msg('请填写标题', 'error'); $('snippet-title').focus(); return; }
   if (!content.trim()) { msg('请填写内容', 'error'); $('snippet-content').focus(); return; }
+  const schedule = readSnippetSchedUI();
   if (snippetEditId) {
     const s = snippets.find(x => x.id === snippetEditId);
-    if (s) { s.title = title; s.content = content; }
+    if (s) {
+      // 模式没变就保留原有启用/暂停状态——改标题/内容不应悄悄重新启用已暂停的定时
+      if (schedule && s.schedule && s.schedule.mode === schedule.mode) {
+        schedule.enabled = s.schedule.enabled;
+      }
+      s.title = title; s.content = content; s.schedule = schedule;
+    }
+    schedRuntime.delete(snippetEditId); // 配置变了，重置该片段的定时运行态
   } else {
-    snippets.push({ id: '', title, content, createdAt: '' });
+    snippets.push({ id: '', title, content, createdAt: '', schedule });
   }
   await persistSnippets();
   clearSnippetEditor();
@@ -1700,21 +1677,39 @@ function renderSnippetList() {
   if (!snippets.length) { list.style.display = 'none'; empty.style.display = ''; return; }
   empty.style.display = 'none';
   list.style.display = '';
-  list.innerHTML = snippets.map(s => `
+  list.innerHTML = snippets.map(s => {
+    const sc = s.schedule;
+    const badge = (sc && sc.mode)
+      ? `<span class="snippet-sched-badge${sc.enabled ? '' : ' off'}">🕐 ${esc(schedLabel(sc))}${sc.enabled ? '' : '（已停）'}</span>`
+      : '';
+    const toggle = (sc && sc.mode)
+      ? `<button class="action-btn snippet-sched-toggle${sc.enabled ? ' on' : ''}" title="${sc.enabled ? '暂停定时' : '启用定时'}">${SNIPPET_ICONS.clock}</button>`
+      : '';
+    return `
     <div class="snippet-row" data-id="${s.id}">
       <div class="snippet-row-main">
-        <div class="snippet-row-title">${esc(s.title)}</div>
+        <div class="snippet-row-title">${esc(s.title)}${badge}</div>
         <div class="snippet-row-preview">${esc(snippetPreview(s.content))}</div>
       </div>
       <div class="snippet-row-actions">
+        ${toggle}
         <button class="action-btn snippet-inject-btn" title="注入当前终端">${SNIPPET_ICONS.inject}</button>
         <button class="action-btn snippet-edit-btn" title="编辑">${SNIPPET_ICONS.edit}</button>
         <button class="action-btn danger snippet-del-btn" title="删除">${SNIPPET_ICONS.del}</button>
       </div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
   list.querySelectorAll('.snippet-row').forEach(row => {
     const s = snippets.find(x => x.id === row.dataset.id);
     if (!s) return;
+    const tgl = row.querySelector('.snippet-sched-toggle');
+    if (tgl) tgl.onclick = async () => {
+      s.schedule.enabled = !s.schedule.enabled;
+      schedRuntime.delete(s.id);
+      await persistSnippets();
+      renderSnippetList();
+      msg(s.schedule.enabled ? '已启用定时' : '已暂停定时', 'info');
+    };
     row.querySelector('.snippet-inject-btn').onclick = () => { closeSnippetModal(); injectSnippet(s.content); };
     row.querySelector('.snippet-edit-btn').onclick = () => loadSnippetIntoEditor(s);
     row.querySelector('.snippet-del-btn').onclick = () => {
@@ -1726,6 +1721,87 @@ function renderSnippetList() {
       });
     };
   });
+}
+
+// ---- 片段定时发送：编辑器控件读写 ----
+function setSnippetSchedUI(sc) {
+  $('snippet-sched-mode').value = (sc && sc.mode) || '';
+  $('snippet-sched-min').value = (sc && sc.intervalMin) || 30;
+  $('snippet-sched-time').value = (sc && sc.time) || '09:00';
+  updateSnippetSchedFields();
+}
+function updateSnippetSchedFields() {
+  const mode = $('snippet-sched-mode').value;
+  $('snippet-sched-interval').style.display = mode === 'interval' ? '' : 'none';
+  $('snippet-sched-daily').style.display = mode === 'daily' ? '' : 'none';
+  $('snippet-sched-hint').style.display = mode ? '' : 'none';
+}
+function readSnippetSchedUI() {
+  const mode = $('snippet-sched-mode').value;
+  if (!mode) return null;
+  if (mode === 'interval') {
+    const m = Math.max(1, parseInt($('snippet-sched-min').value, 10) || 30);
+    return { mode, intervalMin: m, time: '', enabled: true };
+  }
+  return { mode: 'daily', intervalMin: 0, time: $('snippet-sched-time').value || '09:00', enabled: true };
+}
+
+// ===== 片段定时发送引擎：间隔重复 / 每天定时，应用打开时运行 =====
+// 配置存进片段(snippets.json)；运行态(下次/上次)仅内存，关应用即清、重开按配置重挂。
+const schedRuntime = new Map(); // snippetId -> { lastSentMs? | lastFiredDate? }
+let schedTimer = null;
+
+function schedLabel(sc) {
+  if (!sc || !sc.mode) return '';
+  if (sc.mode === 'interval') return `每 ${sc.intervalMin} 分钟`;
+  if (sc.mode === 'daily') return `每天 ${sc.time}`;
+  return '';
+}
+function schedDateKey(d) { return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`; }
+function dailyDue(sc, now) {
+  const [hh, mm] = String(sc.time || '').split(':').map(Number);
+  if (isNaN(hh) || isNaN(mm)) return false;
+  return now.getHours() > hh || (now.getHours() === hh && now.getMinutes() >= mm);
+}
+function checkSchedules() {
+  const now = new Date();
+  const nowMs = now.getTime();
+  const today = schedDateKey(now);
+  snippets.forEach(s => {
+    const sc = s.schedule;
+    if (!sc || !sc.mode || !sc.enabled) return;
+    let rt = schedRuntime.get(s.id);
+    if (!rt) {
+      // 首次见到：武装运行态，不立刻发（interval 从现在起算；daily 已过点则今天不补发）
+      rt = sc.mode === 'interval'
+        ? { lastSentMs: nowMs }
+        : { lastFiredDate: dailyDue(sc, now) ? today : null };
+      schedRuntime.set(s.id, rt);
+      return;
+    }
+    if (sc.mode === 'interval') {
+      const ms = (Number(sc.intervalMin) || 0) * 60000;
+      if (ms > 0 && nowMs - rt.lastSentMs >= ms) { rt.lastSentMs = nowMs; fireSchedule(s); }
+    } else if (dailyDue(sc, now) && rt.lastFiredDate !== today) {
+      rt.lastFiredDate = today;
+      fireSchedule(s);
+    }
+  });
+}
+function fireSchedule(s) {
+  // 没有活动终端就不发（不擅自开新终端），记一条日志
+  if (!activeSession || !sessions.has(activeSession)) {
+    appLog('warn', `定时片段「${s.title}」到点但无活动终端，已跳过`);
+    return;
+  }
+  appLog('info', `定时发送片段「${s.title}」`);
+  msg(`已定时发送：${s.title}`, 'info');
+  injectSnippet(s.content, true); // 注入 + 回车
+}
+function startScheduler() {
+  if (schedTimer) return;
+  schedTimer = setInterval(checkSchedules, 30000); // 30s 一跳
+  checkSchedules(); // 立即武装运行态（不会立刻发）
 }
 
 // ===== 需求清单：碎片需求收集箱 =====

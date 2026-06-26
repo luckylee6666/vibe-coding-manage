@@ -60,7 +60,24 @@ pub struct Server {
     pub created_at: String,
 }
 
-/// Prompt/Snippet 库：可复用的指令片段，一键注入当前终端。
+/// 片段的定时发送配置（前端定时器读它，到点把片段注入当前终端并回车）。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Schedule {
+    /// "interval"（每 N 分钟）| "daily"（每天 HH:MM）
+    pub mode: String,
+    /// interval 模式：间隔分钟数
+    #[serde(default)]
+    pub interval_min: u32,
+    /// daily 模式：每天发送时刻 "HH:MM"
+    #[serde(default)]
+    pub time: String,
+    /// 是否启用（可暂停而不丢配置）
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+/// Prompt/Snippet 库：可复用的指令片段，一键注入当前终端，可选定时发送。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Snippet {
@@ -69,6 +86,9 @@ pub struct Snippet {
     pub content: String,
     #[serde(default, alias = "created_at")]
     pub created_at: String,
+    /// 可选定时发送配置（None = 不定时）
+    #[serde(default)]
+    pub schedule: Option<Schedule>,
 }
 
 /// 需求清单：开发随手记录的碎片需求/想法收集箱。
@@ -1710,30 +1730,10 @@ fn terminal_remote_info(state: State<TerminalState>) -> RemoteInfo {
 /// 查询当前 5 小时窗口的 Claude 用量（走 ccusage）。
 /// async + spawn_blocking：ccusage 要跑几秒，绝不能阻塞主线程（否则 UI 冻住）。
 #[tauri::command]
-async fn claude_usage(state: State<'_, usage::UsageState>) -> Result<usage::ClaudeUsage, String> {
-    let auto = state
-        .auto_hello
-        .load(std::sync::atomic::Ordering::Relaxed);
-    let mut u = tauri::async_runtime::spawn_blocking(usage::fetch_usage_cached)
+async fn claude_usage() -> Result<usage::ClaudeUsage, String> {
+    tauri::async_runtime::spawn_blocking(usage::fetch_usage_cached)
         .await
-        .map_err(|e| e.to_string())?;
-    u.auto_hello = auto;
-    Ok(u)
-}
-
-/// 读「5 小时重置后自动 hello」开关。
-#[tauri::command]
-fn get_auto_hello(state: State<usage::UsageState>) -> bool {
-    state.auto_hello.load(std::sync::atomic::Ordering::Relaxed)
-}
-
-/// 设「5 小时重置后自动 hello」开关并持久化。
-#[tauri::command]
-fn set_auto_hello(state: State<usage::UsageState>, enabled: bool) -> Result<(), String> {
-    state
-        .auto_hello
-        .store(enabled, std::sync::atomic::Ordering::Relaxed);
-    state.save()
+        .map_err(|e| e.to_string())
 }
 
 /// 查询某个 CLI 的周用量（claude / codex / opencode），走 ccusage。
@@ -1812,14 +1812,6 @@ fn update_tray_usage(app: &AppHandle) {
     }
 }
 
-/// 手动立刻发一次 hello（开新窗口 / 测试）。
-#[tauri::command]
-async fn claude_hello_now() -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(usage::fire_hello)
-        .await
-        .map_err(|e| e.to_string())?
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     log_info!(
@@ -1836,11 +1828,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .manage(state)
         .manage(term_state)
-        .manage(usage::UsageState::load())
         .setup(move |app| {
-            // 后台轮询：自动 hello 开启时，5h 窗口重置后自动触发开新窗口
-            let usage_app = app.handle().clone();
-            std::thread::spawn(move || usage::poller(usage_app));
             // 会话状态感知：监控线程扫描"活跃后静默"的终端，emit terminal-attention
             let mon_app = app.handle().clone();
             std::thread::spawn(move || monitor_attention(mon_app, activity_for_monitor));
@@ -1936,15 +1924,12 @@ pub fn run() {
             get_requirements,
             save_requirements,
             claude_usage,
-            get_auto_hello,
-            set_auto_hello,
             agent_weekly,
             oauth_usage,
             has_npx,
             open_url,
             open_log,
-            app_log,
-            claude_hello_now
+            app_log
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
