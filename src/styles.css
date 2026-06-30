@@ -1681,6 +1681,27 @@ body {
 .term-tab-ctx.warn { color: #fbbf24; background: rgba(250, 173, 20, 0.16); }
 .term-tab-ctx.danger { color: #f87171; background: rgba(248, 113, 113, 0.18); }
 
+.term-tab-branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+  max-width: 120px;
+  padding: 1px 6px 1px 4px;
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 15px;
+  border-radius: 4px;
+  color: #9ecb9e;
+  background: rgba(124, 158, 124, 0.16);
+}
+.term-tab-branch svg { width: 11px; height: 11px; flex-shrink: 0; }
+.term-tab-branch span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .term-tab-close {
   display: inline-flex;
   align-items: center;

@@ -935,6 +935,28 @@ fn git_status_one(path: &str) -> GitStatus {
     st
 }
 
+/// 取某目录的当前 git 分支（终端标签显示用）。不预判 .git——交给 git 自己向上找仓库，
+/// 兼容仓库子目录。非 git / 出错 / 分离 HEAD → 空串（前端据此隐藏徽标）。
+#[tauri::command]
+async fn git_branch(path: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if path.is_empty() || !std::path::Path::new(&path).is_dir() {
+            return String::new();
+        }
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&path)
+            .args(["--no-optional-locks", "branch", "--show-current"])
+            .output();
+        match out {
+            Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
+            _ => String::new(),
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
 /// 批量扫描多个项目路径的 git 状态。整体在 spawn_blocking 里跑（绝不阻塞主线程），
 /// 内部按批并发（每批一线程），限制并发量避免项目极多时一次性 fork 上百个 git 进程。
 #[tauri::command]
@@ -1917,6 +1939,7 @@ pub fn run() {
             terminal_remote_info,
             notify,
             git_status_batch,
+            git_branch,
             project_context,
             context_usage,
             get_snippets,

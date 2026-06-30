@@ -904,8 +904,10 @@ function closeRemote() {
 }
 
 // ===== Claude 用量（5 小时窗口） =====
+const FIVE_HOUR_MS = 5 * 3600000;
 let usageCountdownTimer = null;
 let usageResetEpoch = 0;
+let oauthResetMs = 0;           // 权威 5h 限流重置时刻（来自 OAuth resets_at），供计费窗口倒计时统一使用
 let usageAgent = 'claude';      // 当前用量 tab：claude / codex / opencode
 let lastClaudeWeekly = null;    // 缓存 Claude 周用量，poller 重渲染窗口时不丢失
 let npxAvailable = null;        // null=未知 / true / false：花费统计(ccusage)是否可用
@@ -1025,8 +1027,11 @@ function renderUsage(u) {
       `</div>` + weekly;
     return;
   }
-  usageResetEpoch = Date.parse(u.endTime);
-  const startEpoch = Date.parse(u.startTime);
+  // 重置时刻优先用权威的 OAuth 限流窗口（resets_at），保证与上方「限流用量」一致；
+  // 拿不到（oauth 未返回/已过期）才退回 ccusage 估算的 endTime。
+  const useOAuth = oauthResetMs > Date.now();
+  usageResetEpoch = useOAuth ? oauthResetMs : Date.parse(u.endTime);
+  const startEpoch = useOAuth ? (oauthResetMs - FIVE_HOUR_MS) : Date.parse(u.startTime);
   body.innerHTML =
     `<div class="usage-window">` +
       `<div class="usage-window-top">` +
@@ -1056,8 +1061,16 @@ function renderOAuth(o) {
   const el = document.getElementById('usage-oauth');
   if (!el) return;
   if (!o || !o.ok) {
+    oauthResetMs = 0; // 无权威数据 → 下方倒计时退回 ccusage
     el.innerHTML = `<div class="usage-error">${esc((o && o.error) || '限流用量查询失败')}</div>`;
     return;
+  }
+  // 记下权威 5h 重置时刻；若下方 ccusage 倒计时已渲染（oauth 晚于 ccusage 返回），立即校准。
+  oauthResetMs = (o.fiveHour && o.fiveHour.resetsAt) ? Date.parse(o.fiveHour.resetsAt) : 0;
+  if (isNaN(oauthResetMs)) oauthResetMs = 0;
+  if (oauthResetMs > Date.now() && document.getElementById('usage-countdown')) {
+    usageResetEpoch = oauthResetMs;
+    startUsageCountdown(oauthResetMs - FIVE_HOUR_MS);
   }
   const plan = o.plan ? ` · ${esc(o.plan)}` : '';
   const age = `<span class="usage-age">${esc(fmtUsageAge(o.ageSecs))}</span>`;
@@ -2723,7 +2736,27 @@ async function updateContextBadges() {
 }
 function ensureCtxPoll() {
   if (ctxPollTimer) return;
-  ctxPollTimer = setInterval(updateContextBadges, 20000);
+  ctxPollTimer = setInterval(() => { updateContextBadges(); updateBranchBadges(); }, 20000);
+}
+
+// 终端标签 git 分支：显示每个会话工作目录的当前分支（有 git 才显示），随 checkout 在轮询/切换时刷新。
+const TAB_BRANCH_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="6" r="2.2"/><circle cx="6" cy="18" r="2.2"/><circle cx="18" cy="7.5" r="2.2"/><path d="M6 8.2v7.6M8.2 6.2c5.6.4 7.6 1.7 7.6 5.3"/></svg>';
+async function updateBranchBadges() {
+  for (const s of sessions.values()) {
+    const el = s.tabEl && s.tabEl.querySelector('.term-tab-branch');
+    if (!el) continue;
+    if (!s.cwd) { el.style.display = 'none'; continue; }
+    try {
+      const b = await invoke('git_branch', { path: s.cwd });
+      if (b) {
+        el.innerHTML = TAB_BRANCH_SVG + `<span>${esc(b)}</span>`;
+        el.title = `git 分支：${b}`;
+        el.style.display = '';
+      } else {
+        el.style.display = 'none';
+      }
+    } catch (_) { el.style.display = 'none'; }
+  }
 }
 
 function fitSession(id) {
@@ -2750,6 +2783,7 @@ function activateSession(id) {
   fitSession(id);
   s.term.focus();
   clearAttention(id);
+  updateBranchBadges(); // 切到该标签时刷新分支（catch 终端里的 git checkout）
 }
 
 // 关闭终端前确认（提醒先让 AI 更新记忆）
@@ -2809,6 +2843,7 @@ async function createSession({ cwd = '', name = '', autoCmd = '' }) {
     `<span class="term-tab-dot"></span>` +
     `<span class="term-tab-name" title="${esc(label)}">${esc(label)}</span>` +
     toolBadge +
+    `<span class="term-tab-branch" style="display:none;"></span>` +
     `<span class="term-tab-ctx" style="display:none;" title="上下文用量"></span>` +
     `<span class="term-tab-close" title="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 18L18 6M6 6l12 12"/></svg></span>`;
   termEl.tabs.appendChild(tabEl);
@@ -2849,6 +2884,7 @@ async function createSession({ cwd = '', name = '', autoCmd = '' }) {
   updateFabBadge();
   persistSessionLayout();
   ensureCtxPoll();
+  updateBranchBadges(); // 立即显示该会话的分支徽标
   // claude 会话起来后稍等再首刷一次上下文徽标（等它写出 transcript）
   if ((autoCmd || '').trim().split(/\s+/)[0] === 'claude') {
     setTimeout(updateContextBadges, 6000);
